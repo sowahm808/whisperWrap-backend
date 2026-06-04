@@ -31,7 +31,7 @@ function init(): void {
 
   initialized = true;
 }
-
+//sdfdsfsdfdsfsdfdsfdsfdsfsdw
 export function getFirestore(): FirebaseFirestore.Firestore {
   init();
   return admin.firestore();
