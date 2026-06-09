@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { sendConsentEmail } from '../services/email.service.js';
 import { firebaseAdmin, getFirestore, getStorageBucket } from '../services/firebase.service.js';
-import { generateWhisperContent } from '../services/openai.service.js';
+import { OpenAiGenerationError, generateWhisperContent } from '../services/openai.service.js';
 import { tokenService } from '../services/token.service.js';
 import { WhisperRecord, WhisperStatus } from '../types/whisper.types.js';
 
@@ -40,7 +40,11 @@ const uploadSchema = z.object({
 });
 
 function validationError(res: Response, err: z.ZodError) {
-  return res.status(400).json({ error: 'Validation failed', details: err.flatten() });
+  return res.status(400).json({ error: 'Validation failed', message: 'Please check the highlighted fields and try again.', details: err.flatten() });
+}
+
+function errorPayload(error: string, message = error, code?: string) {
+  return { error, message, ...(code ? { code } : {}) };
 }
 
 function senderName(req: Request): string {
@@ -98,6 +102,11 @@ export async function generateWhisper(req: Request, res: Response) {
   try {
     const input = createSchema.parse(req.body);
     const content = await generateWhisperContent(input);
+
+    if (!req.user?.uid) {
+      return res.status(200).json({ whisperId: null, persisted: false, ...content });
+    }
+
     const db = getFirestore();
     const docRef = db.collection('whispers').doc();
 
@@ -105,7 +114,7 @@ export async function generateWhisper(req: Request, res: Response) {
       ...input,
       recipientPhone: input.recipientPhone ?? null,
       senderName: senderName(req),
-      userId: req.user?.uid ?? '',
+      userId: req.user.uid,
       generatedContent: content,
       audioPath: null,
       status: 'generated',
@@ -116,11 +125,15 @@ export async function generateWhisper(req: Request, res: Response) {
 
     await docRef.set(whisper);
 
-    return res.status(201).json({ whisperId: docRef.id, ...content });
+    return res.status(201).json({ whisperId: docRef.id, persisted: true, ...content });
   } catch (err) {
     if (err instanceof z.ZodError) return validationError(res, err);
+    if (err instanceof OpenAiGenerationError) {
+      console.error('generateWhisper AI failed', { code: err.code, message: err.message });
+      return res.status(err.statusCode).json(errorPayload('Failed to generate whisper', err.message, err.code));
+    }
     console.error('generateWhisper failed', err);
-    return res.status(500).json({ error: 'Failed to generate whisper' });
+    return res.status(500).json(errorPayload('Failed to generate whisper'));
   }
 }
 
