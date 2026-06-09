@@ -11,7 +11,10 @@ function getPrivateKey(): string {
 }
 
 function init(): void {
-  if (initialized) return;
+  if (initialized || admin.apps.length > 0) {
+    initialized = true;
+    return;
+  }
 
   const projectId = process.env.FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
@@ -26,11 +29,12 @@ function init(): void {
       clientEmail,
       privateKey: getPrivateKey(),
     }),
-    storageBucket: `${projectId}.appspot.com`,
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET ?? `${projectId}.appspot.com`,
   });
 
   initialized = true;
 }
+
 export function getFirestore(): FirebaseFirestore.Firestore {
   init();
   return admin.firestore();
@@ -46,18 +50,27 @@ export async function verifyFirebaseToken(idToken: string): Promise<admin.auth.D
   return admin.auth().verifyIdToken(idToken);
 }
 
-export async function ensureUserProfile(input: { uid: string; email?: string }): Promise<void> {
+export async function ensureUserProfile(input: { uid: string; email?: string; name?: string }): Promise<void> {
   init();
 
   const userRef = admin.firestore().collection('users').doc(input.uid);
   const snapshot = await userRef.get();
 
   if (snapshot.exists) {
+    await userRef.set(
+      {
+        email: input.email ?? snapshot.data()?.email ?? null,
+        displayName: input.name ?? snapshot.data()?.displayName ?? null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
     return;
   }
 
   await userRef.set({
     email: input.email ?? null,
+    displayName: input.name ?? null,
     subscriptionStatus: 'inactive',
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
