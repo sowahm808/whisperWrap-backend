@@ -31,13 +31,12 @@ function init(): void {
 
   initialized = true;
 }
-//sdfdsfsdfdsfsdfdsfdsfdsfsdw
 export function getFirestore(): FirebaseFirestore.Firestore {
   init();
   return admin.firestore();
 }
 
-export function getStorageBucket(): admin.storage.Bucket {
+export function getStorageBucket(): ReturnType<ReturnType<typeof admin.storage>['bucket']> {
   init();
   return admin.storage().bucket();
 }

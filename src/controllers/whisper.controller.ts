@@ -57,20 +57,53 @@ export async function createAudioUploadUrl(req: Request, res: Response) {
   }
 }
 
-export async function sendConsent(req: Request, res: Response) { try {
-  const { whisperId } = sendConsentSchema.parse(req.body); const db = getFirestore(); const docRef = db.collection('whispers').doc(whisperId); const snapshot = await docRef.get();
-  if (!snapshot.exists) return res.status(404).json({ error: 'Whisper not found' }); const whisper = snapshot.data(); if (whisper?.userId !== req.user?.uid) return res.status(403).json({ error: 'Forbidden' });
-  const token = tokenService.generateSecureToken(); const baseUrl = process.env.APP_BASE_URL; if (!baseUrl) throw new Error('Missing APP_BASE_URL'); const unwrapLink = `${baseUrl}/unwrap/${token}`;
-  await sendConsentEmail({ recipientEmail: whisper.recipientEmail, senderName: whisper.senderName, unwrapLink });
-  await docRef.update({ token, status: 'consent_sent', updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp() });
-  await db.collection('recipientEvents').add({ whisperId, event: 'consent_sent', createdAt: firebaseAdmin.firestore.FieldValue.serverTimestamp() });
-  return res.json({ success: true, unwrapLink });
-} catch (err) { if (err instanceof z.ZodError) return res.status(400).json({ error: 'Validation failed', details: err.flatten() }); return res.status(500).json({ error: 'Failed to send consent' }); } }
+export async function sendConsent(req: Request, res: Response) {
+  try {
+    const { whisperId } = sendConsentSchema.parse(req.body);
+    const db = getFirestore();
+    const docRef = db.collection('whispers').doc(whisperId);
+    const snapshot = await docRef.get();
+    const whisper = snapshot.data();
 
-export async function unwrapByToken(req: Request, res: Response) { try {
-  const { token } = z.object({ token: z.string().min(16) }).parse(req.params); const db = getFirestore(); const query = await db.collection('whispers').where('token', '==', token).limit(1).get();
-  if (query.empty) return res.status(404).json({ error: 'Invalid link' }); const doc = query.docs[0]; const whisper = doc.data();
-  await doc.ref.update({ status: 'opened', updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp() });
-  await db.collection('recipientEvents').add({ whisperId: doc.id, event: 'opened', createdAt: firebaseAdmin.firestore.FieldValue.serverTimestamp() });
-  return res.json({ whisperId: doc.id, recipientName: whisper.recipientName, deliveryFormat: whisper.deliveryFormat, generatedContent: whisper.generatedContent, audioPath: whisper.audioPath ?? null, joinLink: 'https://resurgencevibe.com' });
-} catch { return res.status(500).json({ error: 'Failed to unwrap whisper' }); } }
+    if (!whisper) return res.status(404).json({ error: 'Whisper not found' });
+    if (whisper.userId !== req.user?.uid) return res.status(403).json({ error: 'Forbidden' });
+
+    const token = tokenService.generateSecureToken();
+    const baseUrl = process.env.APP_BASE_URL;
+    if (!baseUrl) throw new Error('Missing APP_BASE_URL');
+
+    const unwrapLink = `${baseUrl}/unwrap/${token}`;
+    await sendConsentEmail({ recipientEmail: whisper.recipientEmail, senderName: whisper.senderName, unwrapLink });
+    await docRef.update({ token, status: 'consent_sent', updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp() });
+    await db.collection('recipientEvents').add({ whisperId, event: 'consent_sent', createdAt: firebaseAdmin.firestore.FieldValue.serverTimestamp() });
+    return res.json({ success: true, unwrapLink });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: 'Validation failed', details: err.flatten() });
+    return res.status(500).json({ error: 'Failed to send consent' });
+  }
+}
+
+export async function unwrapByToken(req: Request, res: Response) {
+  try {
+    const { token } = z.object({ token: z.string().min(16) }).parse(req.params);
+    const db = getFirestore();
+    const query = await db.collection('whispers').where('token', '==', token).limit(1).get();
+    const doc = query.docs.at(0);
+
+    if (!doc) return res.status(404).json({ error: 'Invalid link' });
+
+    const whisper = doc.data();
+    await doc.ref.update({ status: 'opened', updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp() });
+    await db.collection('recipientEvents').add({ whisperId: doc.id, event: 'opened', createdAt: firebaseAdmin.firestore.FieldValue.serverTimestamp() });
+    return res.json({
+      whisperId: doc.id,
+      recipientName: whisper.recipientName,
+      deliveryFormat: whisper.deliveryFormat,
+      generatedContent: whisper.generatedContent,
+      audioPath: whisper.audioPath ?? null,
+      joinLink: 'https://resurgencevibe.com',
+    });
+  } catch {
+    return res.status(500).json({ error: 'Failed to unwrap whisper' });
+  }
+}
