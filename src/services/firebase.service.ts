@@ -46,4 +46,42 @@ export async function verifyFirebaseToken(idToken: string): Promise<admin.auth.D
   return admin.auth().verifyIdToken(idToken);
 }
 
+export interface CreateFirebaseAccountInput {
+  email: string;
+  password: string;
+  displayName?: string;
+}
+
+export async function createFirebaseAccount(input: CreateFirebaseAccountInput): Promise<{
+  uid: string;
+  email: string;
+  displayName?: string;
+  customToken: string;
+}> {
+  init();
+
+  const user = await admin.auth().createUser({
+    email: input.email,
+    password: input.password,
+    displayName: input.displayName,
+  });
+
+  await admin.firestore().collection('users').doc(user.uid).set({
+    email: input.email,
+    displayName: input.displayName ?? null,
+    subscriptionStatus: 'inactive',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  const customToken = await admin.auth().createCustomToken(user.uid);
+
+  return {
+    uid: user.uid,
+    email: input.email,
+    ...(input.displayName ? { displayName: input.displayName } : {}),
+    customToken,
+  };
+}
+
 export const firebaseAdmin = admin;
