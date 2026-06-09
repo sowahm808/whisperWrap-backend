@@ -6,8 +6,8 @@ Production-ready Node.js/Express backend for the WhisperWrap MVP only. ShepherdC
 
 - Firebase Auth token verification for signup/login flows.
 - Firestore user profiles in `users` with `subscriptionStatus`.
-- Active subscription gate for every sender-only WhisperWrap action.
-- AI message generation at `POST /api/whispers/generate`.
+- Active subscription gate for authenticated sender-only WhisperWrap actions after generation.
+- AI message generation at `POST /api/whispers/generate`, with public preview generation enabled by default.
 - Sender review support: load, edit, regenerate, and confirm generated content before consent is sent.
 - Optional audio delivery through Firebase Storage signed upload and signed read URLs.
 - Consent email delivery through SendGrid at `POST /api/whispers/send-consent`.
@@ -29,7 +29,7 @@ Production-ready Node.js/Express backend for the WhisperWrap MVP only. ShepherdC
 }
 ```
 
-Only users with `subscriptionStatus: "active"` can generate, edit, upload audio for, or send WhisperWraps.
+By default, anyone can generate an AI preview WhisperWrap. Only users with `subscriptionStatus: "active"` can edit, upload audio for, or send WhisperWraps. Set `PUBLIC_WHISPER_GENERATION=false` to require active subscriptions for generation too.
 
 ### `whispers/{whisperId}`
 
@@ -64,6 +64,7 @@ Copy `.env.example` to `.env` and fill in the required values.
 | `SENDGRID_API_KEY` | Yes | SendGrid API key. |
 | `FROM_EMAIL` | Yes | Verified SendGrid sender email. |
 | `APP_BASE_URL` | Yes | Frontend base URL used to build `/unwrap/:token` consent links. |
+| `PUBLIC_WHISPER_GENERATION` | No | Set to `false` to require a Firebase ID token and active subscription for `POST /api/whispers/generate`. Public generation is enabled by default so the frontend AI preview button can work before auth is attached. |
 
 ## Local setup
 
@@ -81,10 +82,12 @@ npm run build
 
 ## Authentication
 
-The Angular/Ionic app should authenticate users with Firebase Auth. Send Firebase ID tokens to protected backend endpoints:
+The Angular/Ionic app should authenticate users with Firebase Auth. Send Firebase ID tokens to protected backend endpoints. The backend accepts the token in either the standard `Authorization` header or `X-Firebase-ID-Token`:
 
 ```http
 Authorization: Bearer <firebase-id-token>
+# or
+X-Firebase-ID-Token: <firebase-id-token>
 ```
 
 The backend verifies the token with Firebase Admin SDK and ensures `users/{uid}` exists with `subscriptionStatus: "inactive"` by default.
@@ -110,7 +113,7 @@ The response includes a Firebase custom token. The frontend can call `signInWith
 
 ```http
 POST /api/whispers/generate
-Authorization: Bearer <firebase-id-token>
+Authorization: Bearer <firebase-id-token> # optional unless PUBLIC_WHISPER_GENERATION=false
 Content-Type: application/json
 
 {
@@ -251,7 +254,7 @@ Call this after the recipient starts or completes audio playback to move the sta
 
 1. Create or sign in a Firebase Auth user.
 2. Set `users/{uid}.subscriptionStatus` to `active` in Firestore.
-3. Call `POST /api/whispers/generate` with the protected payload.
+3. Call `POST /api/whispers/generate` with the payload. Include a Firebase ID token if generation is configured to require auth or if you want the whisper attached to the sender account.
 4. Review the generated content in the frontend.
 5. Optionally call `PATCH /api/whispers/:whisperId/content` or `POST /api/whispers/:whisperId/regenerate`, then call `POST /api/whispers/:whisperId/confirm`.
 6. For `audio` or `text_audio`, call `POST /api/whispers/audio-upload-url` and upload audio to Firebase Storage.
