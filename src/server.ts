@@ -6,6 +6,30 @@ import whisperRoutes from './routes/whisper.routes.js';
 dotenv.config();
 
 const app = express();
+
+const configuredOrigins = (process.env.CORS_ORIGIN ?? process.env.FRONTEND_ORIGIN ?? '*')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+const allowedOrigins = configuredOrigins.length > 0 ? configuredOrigins : ['*'];
+
+app.use((req, res, next) => {
+  const requestOrigin = req.headers.origin;
+  const allowAnyOrigin = allowedOrigins.includes('*');
+  const allowedOrigin = requestOrigin && (allowAnyOrigin || allowedOrigins.includes(requestOrigin)) ? requestOrigin : undefined;
+
+  res.header('Vary', 'Origin');
+  res.header('Access-Control-Allow-Origin', allowedOrigin ?? (allowAnyOrigin ? '*' : allowedOrigins[0]));
+  res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+
+  return next();
+});
+
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));

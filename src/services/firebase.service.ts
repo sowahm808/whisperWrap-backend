@@ -46,6 +46,24 @@ export async function verifyFirebaseToken(idToken: string): Promise<admin.auth.D
   return admin.auth().verifyIdToken(idToken);
 }
 
+export async function ensureUserProfile(input: { uid: string; email?: string }): Promise<void> {
+  init();
+
+  const userRef = admin.firestore().collection('users').doc(input.uid);
+  const snapshot = await userRef.get();
+
+  if (snapshot.exists) {
+    return;
+  }
+
+  await userRef.set({
+    email: input.email ?? null,
+    subscriptionStatus: 'inactive',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
 export interface CreateFirebaseAccountInput {
   email: string;
   password: string;
