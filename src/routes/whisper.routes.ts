@@ -11,11 +11,11 @@ import {
   unwrapByToken,
   updateWhisperContent,
 } from '../controllers/whisper.controller.js';
-import { requireActiveSubscription, requireAuth } from '../middleware/auth.middleware.js';
+import { allowPublicGeneration, requireActiveSubscription, requireActiveSubscriptionForAuthenticatedUser, requireAuth } from '../middleware/auth.middleware.js';
 
 const router = Router();
 
-router.post('/generate', requireAuth, requireActiveSubscription, generateWhisper);
+router.post('/generate', allowPublicGeneration, requireActiveSubscriptionForAuthenticatedUser, generateWhisper);
 router.get('/:whisperId', requireAuth, requireActiveSubscription, getWhisper);
 router.patch('/:whisperId/content', requireAuth, requireActiveSubscription, updateWhisperContent);
 router.post('/:whisperId/regenerate', requireAuth, requireActiveSubscription, regenerateWhisper);
