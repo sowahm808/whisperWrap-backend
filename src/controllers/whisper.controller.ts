@@ -182,8 +182,12 @@ export async function regenerateWhisper(req: Request, res: Response) {
     return res.json({ whisperId, ...content });
   } catch (err) {
     if (err instanceof z.ZodError) return validationError(res, err);
+    if (err instanceof OpenAiGenerationError) {
+      console.error('regenerateWhisper AI failed', { code: err.code, message: err.message });
+      return res.status(err.statusCode).json(errorPayload('Failed to regenerate whisper', err.message, err.code));
+    }
     console.error('regenerateWhisper failed', err);
-    return res.status(500).json({ error: 'Failed to regenerate whisper' });
+    return res.status(500).json(errorPayload('Failed to regenerate whisper'));
   }
 }
 

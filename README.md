@@ -57,6 +57,9 @@ Copy `.env.example` to `.env` and fill in the required values.
 | `CORS_ORIGIN` | No | Comma-separated frontend origins. Use your Angular/Ionic origin in production. |
 | `OPENAI_API_KEY` | Yes | OpenAI API key for message generation. |
 | `OPENAI_MODEL` | No | OpenAI model override. Defaults to `gpt-4.1-mini`. |
+| `OPENAI_RETRY_ATTEMPTS` | No | Number of retry attempts for transient OpenAI failures. Defaults to `2`; maximum is `5`. |
+| `OPENAI_RETRY_DELAY_MS` | No | Base retry delay for transient OpenAI failures. Defaults to `500`; maximum is `5000`. |
+| `OPENAI_RATE_LIMIT_FALLBACK` | No | Set to `false` to disable local fallback WhisperWrap copy when OpenAI returns a rate-limit response after retries. Enabled by default. |
 | `FIREBASE_PROJECT_ID` | Yes | Firebase project ID. |
 | `FIREBASE_CLIENT_EMAIL` | Yes | Firebase service account client email. |
 | `FIREBASE_PRIVATE_KEY` | Yes | Firebase service account private key with escaped newlines. |
