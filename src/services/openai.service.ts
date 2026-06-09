@@ -1,13 +1,13 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
-import { DeliveryFormat, WhisperType, WrapStyle } from '../types/whisper.types.js';
+import { DeliveryFormat, GeneratedWhisper, WhisperType, WrapStyle } from '../types/whisper.types.js';
 
 const responseSchema = z.object({
-  title: z.string().min(5),
-  message: z.string().min(20),
-  scriptureReference: z.string().min(3),
-  scriptureText: z.string().min(5),
-  shortPrayer: z.string().min(5),
+  title: z.string().trim().min(5).max(90),
+  message: z.string().trim().min(20).max(1600),
+  scriptureReference: z.string().trim().min(3).max(80),
+  scriptureText: z.string().trim().min(5).max(500),
+  shortPrayer: z.string().trim().min(5).max(500),
 });
 
 let client: OpenAI | null = null;
@@ -17,29 +17,50 @@ function getClient(): OpenAI {
   return client;
 }
 
+function parseOpenAiJson(content: string): GeneratedWhisper {
+  let decoded: unknown;
+
+  try {
+    decoded = JSON.parse(content);
+  } catch {
+    throw new Error('OpenAI returned invalid JSON');
+  }
+
+  const parsed = responseSchema.safeParse(decoded);
+  if (!parsed.success) throw new Error('OpenAI response schema validation failed');
+  return parsed.data;
+}
+
 export async function generateWhisperContent(input: {
   recipientName: string;
   whisperType: WhisperType;
   wrapStyle: WrapStyle;
   deliveryFormat: DeliveryFormat;
   senderIntent: string;
-}) {
-  const prompt = `Create a heartfelt Christian WhisperWrap message.
-Recipient: ${input.recipientName}
-Type: ${input.whisperType}
-Style: ${input.wrapStyle}
-Delivery: ${input.deliveryFormat}
+}): Promise<GeneratedWhisper> {
+  const prompt = `Create one original Christian WhisperWrap message for the MVP.
+Recipient name: ${input.recipientName}
+Whisper type: ${input.whisperType}
+Wrap style: ${input.wrapStyle}
+Delivery format: ${input.deliveryFormat}
 Sender intent: ${input.senderIntent}
-Return strict JSON with keys: title, message, scriptureReference, scriptureText, shortPrayer.`;
+
+Requirements:
+- Return only valid JSON.
+- JSON keys must be title, message, scriptureReference, scriptureText, shortPrayer.
+- Message must be warm, consent-safe, and under 220 words.
+- Scripture must be a public-domain Bible translation wording or a brief paraphrase.
+- Do not invent private facts about the recipient.
+- Do not include markdown.`;
 
   const completion = await getClient().chat.completions.create({
-    model: 'gpt-4.1-mini',
-    temperature: 0.8,
+    model: process.env.OPENAI_MODEL ?? 'gpt-4.1-mini',
+    temperature: 0.7,
     messages: [
       {
         role: 'system',
         content:
-          'You write compassionate, biblical, clear language. Keep message under 220 words and prayer under 60 words.',
+          'You write compassionate, biblical, clear language for Christian encouragement. Avoid manipulation, shame, medical claims, and guaranteed outcomes.',
       },
       { role: 'user', content: prompt },
     ],
@@ -49,7 +70,5 @@ Return strict JSON with keys: title, message, scriptureReference, scriptureText,
   const content = completion.choices[0]?.message?.content;
   if (!content) throw new Error('OpenAI returned empty content');
 
-  const parsed = responseSchema.safeParse(JSON.parse(content));
-  if (!parsed.success) throw new Error('OpenAI response schema validation failed');
-  return parsed.data;
+  return parseOpenAiJson(content);
 }

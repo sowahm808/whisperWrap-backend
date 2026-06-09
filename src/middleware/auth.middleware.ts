@@ -7,6 +7,7 @@ declare global {
       user?: {
         uid: string;
         email?: string;
+        name?: string;
       };
     }
   }
@@ -20,7 +21,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
   try {
     const decoded = await verifyFirebaseToken(auth.replace('Bearer ', '').trim());
-    req.user = { uid: decoded.uid, email: decoded.email };
+    req.user = { uid: decoded.uid, email: decoded.email, name: decoded.name };
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
@@ -44,7 +45,7 @@ export async function requireActiveSubscription(req: Request, res: Response, nex
       return res.status(403).json({ error: 'Subscription required' });
     }
 
-    next();
+    return next();
   } catch {
     return res.status(500).json({ error: 'Failed to validate subscription' });
   }

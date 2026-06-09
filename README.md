@@ -1,26 +1,95 @@
 # WhisperWrap Backend MVP
 
-Node.js/Express backend for WhisperWrap MVP only.
+Production-ready Node.js/Express backend for the WhisperWrap MVP only. ShepherdCare is intentionally not included.
 
-## Features
-- Firebase Auth account creation and verification
-- Subscription gate (`users/{uid}.subscriptionStatus === active`)
-- AI message generation endpoint (`POST /api/whispers/generate`)
-- Optional audio upload URL generation (`POST /api/whispers/audio-upload-url`)
-- Consent email endpoint (`POST /api/whispers/send-consent`)
-- Public unwrap endpoint (`GET /api/whispers/unwrap/:token`)
-- Firestore collections: `users`, `whispers`, `recipientEvents`
+## MVP capabilities
 
-## Auth
-The backend accepts Firebase ID tokens from the Angular/Firebase client. After signing in or signing up with Firebase Auth, call `currentUser.getIdToken()` and pass it to protected backend endpoints:
+- Firebase Auth token verification for signup/login flows.
+- Firestore user profiles in `users` with `subscriptionStatus`.
+- Active subscription gate for every sender-only WhisperWrap action.
+- AI message generation at `POST /api/whispers/generate`.
+- Sender review support: load, edit, regenerate, and confirm generated content before consent is sent.
+- Optional audio delivery through Firebase Storage signed upload and signed read URLs.
+- Consent email delivery through SendGrid at `POST /api/whispers/send-consent`.
+- Public unwrap flow at `/unwrap/:token` on the frontend, backed by `GET /api/whispers/unwrap/:token`.
+- Recipient event tracking in `recipientEvents` for `consent_sent`, `accepted`, `opened`, and `listened`.
+- Whisper statuses: `draft`, `generated`, `consent_sent`, `accepted`, `opened`, `listened`, `failed`.
+
+## Firestore collections
+
+### `users/{uid}`
+
+```json
+{
+  "email": "sender@example.com",
+  "displayName": "Sender Name",
+  "subscriptionStatus": "inactive | active",
+  "createdAt": "serverTimestamp",
+  "updatedAt": "serverTimestamp"
+}
+```
+
+Only users with `subscriptionStatus: "active"` can generate, edit, upload audio for, or send WhisperWraps.
+
+### `whispers/{whisperId}`
+
+Stores the recipient details, sender intent, generated content, optional `audioPath`, current status, and a hashed unwrap token. Raw unwrap tokens are never stored.
+
+### `recipientEvents/{eventId}`
+
+Stores immutable recipient timeline events:
+
+```json
+{
+  "whisperId": "abc123",
+  "event": "consent_sent | accepted | opened | listened",
+  "createdAt": "serverTimestamp"
+}
+```
+
+## Environment variables
+
+Copy `.env.example` to `.env` and fill in the required values.
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `PORT` | No | API port. Defaults to `3000`. |
+| `CORS_ORIGIN` | No | Comma-separated frontend origins. Use your Angular/Ionic origin in production. |
+| `OPENAI_API_KEY` | Yes | OpenAI API key for message generation. |
+| `OPENAI_MODEL` | No | OpenAI model override. Defaults to `gpt-4.1-mini`. |
+| `FIREBASE_PROJECT_ID` | Yes | Firebase project ID. |
+| `FIREBASE_CLIENT_EMAIL` | Yes | Firebase service account client email. |
+| `FIREBASE_PRIVATE_KEY` | Yes | Firebase service account private key with escaped newlines. |
+| `FIREBASE_STORAGE_BUCKET` | No | Storage bucket override. Defaults to `<projectId>.appspot.com`. |
+| `SENDGRID_API_KEY` | Yes | SendGrid API key. |
+| `FROM_EMAIL` | Yes | Verified SendGrid sender email. |
+| `APP_BASE_URL` | Yes | Frontend base URL used to build `/unwrap/:token` consent links. |
+
+## Local setup
+
+```bash
+npm install
+npm run dev
+```
+
+Useful checks:
+
+```bash
+npm run typecheck
+npm run build
+```
+
+## Authentication
+
+The Angular/Ionic app should authenticate users with Firebase Auth. Send Firebase ID tokens to protected backend endpoints:
 
 ```http
 Authorization: Bearer <firebase-id-token>
 ```
 
-The middleware verifies the token with the Firebase Admin SDK and ensures `users/{uid}` exists with `subscriptionStatus: "inactive"` if the frontend did not already create the profile document. This is compatible with a frontend service that uses `createUserWithEmailAndPassword`, writes `users/{uid}`, and reads the user profile from Firestore.
+The backend verifies the token with Firebase Admin SDK and ensures `users/{uid}` exists with `subscriptionStatus: "inactive"` by default.
 
-An optional backend signup endpoint is still available if you prefer server-side account creation:
+An optional server-side signup helper is available:
 
 ```http
 POST /api/auth/signup
@@ -33,24 +102,161 @@ Content-Type: application/json
 }
 ```
 
-The endpoint uses the Firebase Admin SDK to create the Auth user, creates `users/{uid}` with `subscriptionStatus: "inactive"`, and returns a Firebase custom token. On the frontend, call `signInWithCustomToken(auth, customToken)` with the returned token.
+The response includes a Firebase custom token. The frontend can call `signInWithCustomToken(auth, customToken)`.
 
-## Setup
-1. Copy `.env.example` to `.env` and fill values. Set `CORS_ORIGIN` to your Angular app origin, for example `http://localhost:4200`.
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Run in dev:
-   ```bash
-   npm run dev
-   ```
+## API endpoints
 
-## API flow test
-1. Call `POST /api/auth/signup`, sign in with the returned custom token, and get an ID token on the frontend.
-2. Ensure `users/{uid}` has `subscriptionStatus: "active"`.
-3. Call `POST /api/whispers/generate` with Bearer token and payload.
-4. (Optional audio) call `POST /api/whispers/audio-upload-url`, then `PUT` raw audio to returned signed URL.
-5. Call `POST /api/whispers/send-consent` with `whisperId`.
-6. Open returned unwrap link (or call `GET /api/whispers/unwrap/:token`).
-7. Verify `whispers.status` and `recipientEvents` updates.
+### Generate WhisperWrap
+
+```http
+POST /api/whispers/generate
+Authorization: Bearer <firebase-id-token>
+Content-Type: application/json
+
+{
+  "recipientName": "Jordan",
+  "recipientEmail": "jordan@example.com",
+  "recipientPhone": "+15551234567",
+  "whisperType": "encouragement",
+  "wrapStyle": "gentle",
+  "deliveryFormat": "text_audio",
+  "senderIntent": "Encourage Jordan before a major life transition."
+}
+```
+
+Response:
+
+```json
+{
+  "whisperId": "abc123",
+  "title": "A Gentle Word for the Road Ahead",
+  "message": "...",
+  "scriptureReference": "Psalm 121:8",
+  "scriptureText": "...",
+  "shortPrayer": "..."
+}
+```
+
+### Load generated WhisperWrap
+
+```http
+GET /api/whispers/:whisperId
+Authorization: Bearer <firebase-id-token>
+```
+
+### Edit reviewed content
+
+```http
+PATCH /api/whispers/:whisperId/content
+Authorization: Bearer <firebase-id-token>
+Content-Type: application/json
+
+{
+  "generatedContent": {
+    "title": "Updated title",
+    "message": "Updated message...",
+    "scriptureReference": "Psalm 121:8",
+    "scriptureText": "Updated scripture text...",
+    "shortPrayer": "Updated prayer..."
+  }
+}
+```
+
+Edits are rejected after consent has been sent.
+
+### Regenerate content
+
+```http
+POST /api/whispers/:whisperId/regenerate
+Authorization: Bearer <firebase-id-token>
+```
+
+Regeneration is rejected after consent has been sent.
+
+### Confirm reviewed content
+
+```http
+POST /api/whispers/:whisperId/confirm
+Authorization: Bearer <firebase-id-token>
+```
+
+Confirmation records `contentConfirmedAt` and keeps the whisper sendable without introducing non-MVP statuses.
+
+### Create audio upload URL
+
+```http
+POST /api/whispers/audio-upload-url
+Authorization: Bearer <firebase-id-token>
+Content-Type: application/json
+
+{
+  "whisperId": "abc123",
+  "contentType": "audio/webm"
+}
+```
+
+Upload the audio file directly to the returned signed `uploadUrl` within 15 minutes. Audio upload is only allowed for `audio` or `text_audio` delivery formats.
+
+### Send consent email
+
+```http
+POST /api/whispers/send-consent
+Authorization: Bearer <firebase-id-token>
+Content-Type: application/json
+
+{
+  "whisperId": "abc123"
+}
+```
+
+Email body:
+
+```text
+{SenderName} has sent you a WhisperWrap through WhisperComp.
+Would you like to unwrap it?
+Click here to accept and view your message: {unwrapLink}
+```
+
+For audio deliveries, this endpoint requires an uploaded audio file first.
+
+### Public unwrap
+
+Frontend route: `/unwrap/:token`
+
+Backend endpoint used by the public page:
+
+```http
+GET /api/whispers/unwrap/:token
+```
+
+The frontend may call `POST /api/whispers/unwrap/:token/accept` when the recipient taps accept. The content request records `opened`. If the frontend skips the explicit accept call, the first successful content request records both `accepted` and `opened`. If audio exists, the response includes a one-hour signed `audioUrl`.
+
+### Accept unwrap
+
+```http
+POST /api/whispers/unwrap/:token/accept
+```
+
+Call this when the recipient accepts the consent prompt before displaying content.
+
+### Mark audio listened
+
+```http
+POST /api/whispers/unwrap/:token/listened
+```
+
+Call this after the recipient starts or completes audio playback to move the status to `listened` and record a recipient event.
+
+## End-to-end MVP test flow
+
+1. Create or sign in a Firebase Auth user.
+2. Set `users/{uid}.subscriptionStatus` to `active` in Firestore.
+3. Call `POST /api/whispers/generate` with the protected payload.
+4. Review the generated content in the frontend.
+5. Optionally call `PATCH /api/whispers/:whisperId/content` or `POST /api/whispers/:whisperId/regenerate`, then call `POST /api/whispers/:whisperId/confirm`.
+6. For `audio` or `text_audio`, call `POST /api/whispers/audio-upload-url` and upload audio to Firebase Storage.
+7. Call `POST /api/whispers/send-consent`.
+8. Open the returned frontend unwrap link.
+9. The public page calls `GET /api/whispers/unwrap/:token`, displays the message, scripture, prayer, optional audio, and the “Join Resurgence Vibe” link.
+10. If audio is played, call `POST /api/whispers/unwrap/:token/listened`.
+11. Verify `whispers.status` and `recipientEvents` in Firestore.
