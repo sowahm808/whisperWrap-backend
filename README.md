@@ -12,7 +12,15 @@ Node.js/Express backend for WhisperWrap MVP only.
 - Firestore collections: `users`, `whispers`, `recipientEvents`
 
 ## Auth
-Create accounts through the backend instead of calling Firebase client `createUserWithEmailAndPassword` directly:
+The backend accepts Firebase ID tokens from the Angular/Firebase client. After signing in or signing up with Firebase Auth, call `currentUser.getIdToken()` and pass it to protected backend endpoints:
+
+```http
+Authorization: Bearer <firebase-id-token>
+```
+
+The middleware verifies the token with the Firebase Admin SDK and ensures `users/{uid}` exists with `subscriptionStatus: "inactive"` if the frontend did not already create the profile document. This is compatible with a frontend service that uses `createUserWithEmailAndPassword`, writes `users/{uid}`, and reads the user profile from Firestore.
+
+An optional backend signup endpoint is still available if you prefer server-side account creation:
 
 ```http
 POST /api/auth/signup
@@ -25,10 +33,10 @@ Content-Type: application/json
 }
 ```
 
-The endpoint uses the Firebase Admin SDK to create the Auth user, creates `users/{uid}` with `subscriptionStatus: "inactive"`, and returns a Firebase custom token. On the frontend, call `signInWithCustomToken(auth, customToken)` with the returned token. This avoids the Firebase Web SDK `auth/operation-not-allowed` error that occurs when the Email/Password sign-in provider is disabled for direct client sign-up.
+The endpoint uses the Firebase Admin SDK to create the Auth user, creates `users/{uid}` with `subscriptionStatus: "inactive"`, and returns a Firebase custom token. On the frontend, call `signInWithCustomToken(auth, customToken)` with the returned token.
 
 ## Setup
-1. Copy `.env.example` to `.env` and fill values.
+1. Copy `.env.example` to `.env` and fill values. Set `CORS_ORIGIN` to your Angular app origin, for example `http://localhost:4200`.
 2. Install dependencies:
    ```bash
    npm install

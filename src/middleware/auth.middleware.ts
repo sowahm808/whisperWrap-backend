@@ -1,5 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
-import { getFirestore, verifyFirebaseToken } from '../services/firebase.service.js';
+import { ensureUserProfile, getFirestore, verifyFirebaseToken } from '../services/firebase.service.js';
 
 declare global {
   namespace Express {
@@ -13,17 +13,23 @@ declare global {
 }
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
-  try {
-    const auth = req.headers.authorization;
-    if (!auth?.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Missing bearer token' });
-    }
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing bearer token' });
+  }
 
+  try {
     const decoded = await verifyFirebaseToken(auth.replace('Bearer ', '').trim());
     req.user = { uid: decoded.uid, email: decoded.email };
-    next();
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
+  }
+
+  try {
+    await ensureUserProfile(req.user);
+    return next();
+  } catch {
+    return res.status(500).json({ error: 'Failed to initialize user profile' });
   }
 }
 
