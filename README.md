@@ -108,7 +108,7 @@ Content-Type: application/json
 }
 ```
 
-The response includes a Firebase custom token. The frontend can call `signInWithCustomToken(auth, customToken)`.
+The response includes a Firebase custom token. The frontend can call `signInWithCustomToken(auth, customToken)`. Protected backend endpoints must receive the signed-in user's Firebase ID token (for example, from `await auth.currentUser.getIdToken()`), not this custom token.
 
 ## API endpoints
 
@@ -144,7 +144,7 @@ Authenticated response:
 }
 ```
 
-Unauthenticated public preview responses use `200 OK`, return `"whisperId": null`, and include `"persisted": false` with the same generated content fields.
+Unauthenticated public preview responses use `200 OK`, return `"whisperId": null`, and include `"persisted": false` with the same generated content fields. Because these previews are not stored, they cannot be sent for consent until the user signs in, has an active subscription, and generates again with a Firebase ID token so the response includes a persisted `whisperId`.
 
 ### Load generated WhisperWrap
 
@@ -217,6 +217,8 @@ Content-Type: application/json
   "whisperId": "abc123"
 }
 ```
+
+A `401 Unauthorized` from this endpoint means the request did not include a verifiable Firebase ID token. A `403 subscription_required` means the token was valid, but `users/{uid}.subscriptionStatus` is not `active`.
 
 Email body:
 

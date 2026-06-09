@@ -15,9 +15,10 @@ declare global {
 }
 
 function extractBearerToken(req: Request): string | undefined {
-  const auth = req.headers.authorization;
-  if (auth?.startsWith('Bearer ')) {
-    return auth.replace('Bearer ', '').trim();
+  const auth = req.headers.authorization?.trim();
+  const bearerMatch = auth?.match(/^Bearer\s+(.+)$/i);
+  if (bearerMatch?.[1]?.trim()) {
+    return bearerMatch[1].trim();
   }
 
   const firebaseToken = req.header('X-Firebase-ID-Token')?.trim();
@@ -26,6 +27,22 @@ function extractBearerToken(req: Request): string | undefined {
   }
 
   return undefined;
+}
+
+function missingTokenResponse() {
+  return {
+    code: 'missing_token',
+    error: 'Missing bearer token',
+    message: 'This endpoint requires a Firebase ID token. Send it as Authorization: Bearer <firebase-id-token> or X-Firebase-ID-Token.',
+  };
+}
+
+function invalidTokenResponse() {
+  return {
+    code: 'invalid_token',
+    error: 'Invalid token',
+    message: 'The provided token could not be verified by Firebase Admin. Send a Firebase ID token from the signed-in user, not the custom token returned by signup.',
+  };
 }
 
 async function attachAuthenticatedUser(req: Request): Promise<void> {
@@ -58,11 +75,11 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   await attachAuthenticatedUser(req);
 
   if (req.authError === 'missing_token') {
-    return res.status(401).json({ code: 'missing_token', error: 'Missing bearer token' });
+    return res.status(401).json(missingTokenResponse());
   }
 
   if (req.authError === 'invalid_token') {
-    return res.status(401).json({ code: 'invalid_token', error: 'Invalid token' });
+    return res.status(401).json(invalidTokenResponse());
   }
 
   if (req.authError === 'profile_init_failed') {
@@ -80,9 +97,7 @@ export async function allowPublicGeneration(req: Request, res: Response, next: N
   }
 
   if (!req.user && !publicGenerationEnabled()) {
-    const code = req.authError === 'invalid_token' ? 'invalid_token' : 'missing_token';
-    const error = req.authError === 'invalid_token' ? 'Invalid token' : 'Missing bearer token';
-    return res.status(401).json({ code, error });
+    return res.status(401).json(req.authError === 'invalid_token' ? invalidTokenResponse() : missingTokenResponse());
   }
 
   return next();
