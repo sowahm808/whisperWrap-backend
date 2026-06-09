@@ -29,7 +29,7 @@ Production-ready Node.js/Express backend for the WhisperWrap MVP only. ShepherdC
 }
 ```
 
-By default, anyone can generate an AI preview WhisperWrap. Only users with `subscriptionStatus: "active"` can edit, upload audio for, or send WhisperWraps. Set `PUBLIC_WHISPER_GENERATION=false` to require active subscriptions for generation too.
+By default, anyone can generate an AI preview WhisperWrap. Unauthenticated preview generation returns AI content without writing a backend `whispers` document, so the preview button does not depend on Firebase Admin being configured for anonymous callers. Include a Firebase ID token when calling `POST /api/whispers/generate` if you want the backend to persist the generated whisper and return a `whisperId`. Only users with `subscriptionStatus: "active"` can edit, upload audio for, or send WhisperWraps. Set `PUBLIC_WHISPER_GENERATION=false` to require active subscriptions for generation too.
 
 ### `whispers/{whisperId}`
 
@@ -64,7 +64,7 @@ Copy `.env.example` to `.env` and fill in the required values.
 | `SENDGRID_API_KEY` | Yes | SendGrid API key. |
 | `FROM_EMAIL` | Yes | Verified SendGrid sender email. |
 | `APP_BASE_URL` | Yes | Frontend base URL used to build `/unwrap/:token` consent links. |
-| `PUBLIC_WHISPER_GENERATION` | No | Set to `false` to require a Firebase ID token and active subscription for `POST /api/whispers/generate`. Public generation is enabled by default so the frontend AI preview button can work before auth is attached. |
+| `PUBLIC_WHISPER_GENERATION` | No | Set to `false` to require a Firebase ID token and active subscription for `POST /api/whispers/generate`. Public generation is enabled by default so the frontend AI preview button can work before auth is attached; unauthenticated previews are not persisted by the backend. |
 
 ## Local setup
 
@@ -127,11 +127,12 @@ Content-Type: application/json
 }
 ```
 
-Response:
+Authenticated response:
 
 ```json
 {
   "whisperId": "abc123",
+  "persisted": true,
   "title": "A Gentle Word for the Road Ahead",
   "message": "...",
   "scriptureReference": "Psalm 121:8",
@@ -139,6 +140,8 @@ Response:
   "shortPrayer": "..."
 }
 ```
+
+Unauthenticated public preview responses use `200 OK`, return `"whisperId": null`, and include `"persisted": false` with the same generated content fields.
 
 ### Load generated WhisperWrap
 
