@@ -67,6 +67,7 @@ Copy `.env.example` to `.env` and fill in the required values.
 | `SENDGRID_API_KEY` | Yes | SendGrid API key. |
 | `FROM_EMAIL` | Yes | Verified SendGrid sender email. |
 | `APP_BASE_URL` | Yes | Frontend base URL used to build `/unwrap/:token` consent links. |
+| `PASSWORD_RESET_CONTINUE_URL` | No | Optional Firebase password reset continue URL. |
 | `PUBLIC_WHISPER_GENERATION` | No | Set to `false` to require a Firebase ID token and active subscription for `POST /api/whispers/generate`. Public generation is enabled by default so the frontend AI preview button can work before auth is attached; unauthenticated previews are not persisted by the backend. |
 
 ## Local setup
@@ -109,6 +110,17 @@ Content-Type: application/json
 ```
 
 The response includes a Firebase custom token. The frontend can call `signInWithCustomToken(auth, customToken)`. Protected backend endpoints must receive the signed-in user's Firebase ID token (for example, from `await auth.currentUser.getIdToken()`), not this custom token.
+
+A server-side forgot password helper is also available. It generates a Firebase password reset link and sends it through SendGrid. The response is intentionally generic when an account is not found.
+
+```http
+POST /api/auth/forgot-password
+Content-Type: application/json
+
+{
+  "email": "user@example.com"
+}
+```
 
 ## API endpoints
 
