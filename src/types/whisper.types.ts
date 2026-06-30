@@ -38,7 +38,7 @@ export interface WhisperRecord {
   userId: string;
   senderName: string;
   recipientName: string;
-  recipientEmail: string;
+  recipientEmail: string | null;
   recipientPhone?: string | null;
   whisperType: WhisperType;
   wrapStyle: WrapStyle;
