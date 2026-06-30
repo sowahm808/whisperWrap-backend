@@ -115,4 +115,15 @@ export async function createFirebaseAccount(input: CreateFirebaseAccountInput): 
   };
 }
 
+
+export async function generatePasswordResetLink(email: string): Promise<string> {
+  init();
+
+  const actionCodeSettings = process.env.PASSWORD_RESET_CONTINUE_URL
+    ? { url: process.env.PASSWORD_RESET_CONTINUE_URL, handleCodeInApp: false }
+    : undefined;
+
+  return admin.auth().generatePasswordResetLink(email, actionCodeSettings);
+}
+
 export const firebaseAdmin = admin;

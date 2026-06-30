@@ -51,3 +51,26 @@ Click here to accept and view your message: ${payload.unwrapLink}`;
     `,
   });
 }
+
+export async function sendPasswordResetEmail(payload: { recipientEmail: string; resetLink: string }) {
+  ensureConfig();
+  const from = process.env.FROM_EMAIL;
+  if (!from) throw new Error('Missing FROM_EMAIL');
+
+  const safeLink = escapeHtml(payload.resetLink);
+
+  await sgMail.send({
+    to: payload.recipientEmail,
+    from,
+    subject: 'Reset your WhisperWrap password',
+    text: `We received a request to reset your WhisperWrap password.
+Reset your password here: ${payload.resetLink}
+If you did not request this, you can ignore this email.`,
+    html: `
+      <p>We received a request to reset your WhisperWrap password.</p>
+      <p><a href="${safeLink}">Reset your password</a></p>
+      <p>If you did not request this, you can ignore this email.</p>
+    `,
+  });
+}
+
