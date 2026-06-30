@@ -14,6 +14,15 @@ declare global {
   }
 }
 
+function bodyFirebaseToken(req: Request): string | undefined {
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+    return undefined;
+  }
+
+  const candidate = (req.body as Record<string, unknown>).firebaseIdToken;
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
+}
+
 function extractBearerToken(req: Request): string | undefined {
   const auth = req.headers.authorization?.trim();
   const bearerMatch = auth?.match(/^Bearer\s+(.+)$/i);
@@ -26,14 +35,14 @@ function extractBearerToken(req: Request): string | undefined {
     return firebaseToken;
   }
 
-  return undefined;
+  return bodyFirebaseToken(req);
 }
 
 function missingTokenResponse() {
   return {
     code: 'missing_token',
     error: 'Missing bearer token',
-    message: 'This endpoint requires a Firebase ID token. Send it as Authorization: Bearer <firebase-id-token> or X-Firebase-ID-Token.',
+    message: 'This endpoint requires a Firebase ID token. Send it as Authorization: Bearer <firebase-id-token>, X-Firebase-ID-Token, or firebaseIdToken in the JSON body.',
   };
 }
 
