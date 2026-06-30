@@ -19,12 +19,17 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#039;');
 }
 
+export interface EmailDeliveryResult {
+  messageId: string | null;
+  statusCode: number | null;
+}
+
 export async function sendConsentEmail(payload: {
   recipientEmail: string;
   recipientName: string;
   senderName: string;
   unwrapLink: string;
-}) {
+}): Promise<EmailDeliveryResult> {
   ensureConfig();
   const from = process.env.FROM_EMAIL;
   if (!from) throw new Error('Missing FROM_EMAIL');
@@ -38,7 +43,7 @@ Click here to accept and view your message: ${payload.unwrapLink}`;
   const safeRecipientName = escapeHtml(payload.recipientName.trim() || 'there');
   const safeLink = escapeHtml(payload.unwrapLink);
 
-  await sgMail.send({
+  const [response] = await sgMail.send({
     to: payload.recipientEmail,
     from,
     subject: `${senderName} sent you a WhisperWrap`,
@@ -50,6 +55,11 @@ Click here to accept and view your message: ${payload.unwrapLink}`;
       <p><a href="${safeLink}">Click here to accept and view your message</a></p>
     `,
   });
+
+  return {
+    messageId: response.headers['x-message-id'] ?? null,
+    statusCode: response.statusCode ?? null,
+  };
 }
 
 export async function sendPasswordResetEmail(payload: { recipientEmail: string; resetLink: string }) {

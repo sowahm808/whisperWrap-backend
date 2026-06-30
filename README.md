@@ -86,12 +86,14 @@ npm run build
 
 ## Authentication
 
-The Angular/Ionic app should authenticate users with Firebase Auth. Send Firebase ID tokens to protected backend endpoints. The backend accepts the token in either the standard `Authorization` header or `X-Firebase-ID-Token`:
+The Angular/Ionic app should authenticate users with Firebase Auth. Send Firebase ID tokens to protected backend endpoints. The backend accepts the token in the standard `Authorization` header, the `X-Firebase-ID-Token` header, or (for clients that cannot attach custom headers) a `firebaseIdToken` JSON body field:
 
 ```http
 Authorization: Bearer <firebase-id-token>
 # or
 X-Firebase-ID-Token: <firebase-id-token>
+# or include in JSON request body for protected POST/PATCH endpoints:
+{ "firebaseIdToken": "<firebase-id-token>" }
 ```
 
 The backend verifies the token with Firebase Admin SDK and ensures `users/{uid}` exists with `subscriptionStatus: "inactive"` by default.
@@ -226,11 +228,14 @@ Authorization: Bearer <firebase-id-token>
 Content-Type: application/json
 
 {
-  "whisperId": "abc123"
+  "whisperId": "abc123",
+  "firebaseIdToken": "<firebase-id-token>"
 }
 ```
 
-A `401 Unauthorized` from this endpoint means the request did not include a verifiable Firebase ID token. A `403 subscription_required` means the token was valid, but `users/{uid}.subscriptionStatus` is not `active`.
+`firebaseIdToken` is an optional fallback for clients that cannot attach auth headers.
+
+A `401 Unauthorized` from this endpoint means the request did not include a verifiable Firebase ID token. In the frontend, call `await auth.currentUser.getIdToken()` after the user is signed in and send that ID token; do not send the custom token returned by `/api/auth/signup`. A `403 subscription_required` means the token was valid, but `users/{uid}.subscriptionStatus` is not `active`.
 
 Email body:
 
