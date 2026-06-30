@@ -433,11 +433,22 @@ export async function sendConsent(req: Request, res: Response) {
       unwrapLink,
       channels,
     });
+  // } catch (err) {
+  //   if (err instanceof z.ZodError) return validationError(res, err);
+  //   console.error('sendConsent failed', err);
+  //   return res.status(500).json({ error: 'Failed to send consent' });
+  // }
+
   } catch (err) {
-    if (err instanceof z.ZodError) return validationError(res, err);
-    console.error('sendConsent failed', err);
-    return res.status(500).json({ error: 'Failed to send consent' });
-  }
+  if (err instanceof z.ZodError) return validationError(res, err);
+
+  console.error('sendConsent failed', err);
+
+  return res.status(500).json({
+    error: 'Failed to send consent',
+    message: err instanceof Error ? err.message : String(err),
+  });
+}
 }
 
 export async function acceptWhisper(req: Request, res: Response) {
