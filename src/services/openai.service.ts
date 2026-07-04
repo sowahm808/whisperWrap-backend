@@ -25,12 +25,7 @@ type WhisperGenerationInput = {
   wrapStyle: WrapStyle;
   deliveryFormat: DeliveryFormat;
   senderIntent: string;
-
-  /**
-   * This comes from the frontend form.
-   * Example: "Write a comforting message for my friend who lost his job."
-   */
-  prompt: string;
+  prompt?: string;
 };
 
 type OpenAIErrorLike = {
@@ -62,12 +57,18 @@ function getClient(): OpenAI {
   }
 
   if (!client) {
-    client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
+    client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   }
 
   return client;
+}
+
+function clean(value: string | undefined | null): string {
+  return String(value ?? '').trim();
+}
+
+function getPrompt(input: WhisperGenerationInput): string {
+  return clean(input.prompt || input.senderIntent);
 }
 
 function parseOpenAiJson(content: string): GeneratedWhisper {
@@ -97,10 +98,7 @@ function parseOpenAiJson(content: string): GeneratedWhisper {
 }
 
 function asOpenAIError(err: unknown): OpenAIErrorLike {
-  if (err && typeof err === 'object') {
-    return err as OpenAIErrorLike;
-  }
-
+  if (err && typeof err === 'object') return err as OpenAIErrorLike;
   return {};
 }
 
@@ -152,21 +150,13 @@ function toGenerationError(err: unknown): OpenAiGenerationError {
 
 function retryAttempts(): number {
   const configured = Number(process.env.OPENAI_RETRY_ATTEMPTS);
-
-  if (!Number.isFinite(configured)) {
-    return DEFAULT_OPENAI_RETRY_ATTEMPTS;
-  }
-
+  if (!Number.isFinite(configured)) return DEFAULT_OPENAI_RETRY_ATTEMPTS;
   return Math.max(0, Math.min(Math.floor(configured), 5));
 }
 
 function retryDelayMs(): number {
   const configured = Number(process.env.OPENAI_RETRY_DELAY_MS);
-
-  if (!Number.isFinite(configured)) {
-    return DEFAULT_OPENAI_RETRY_DELAY_MS;
-  }
-
+  if (!Number.isFinite(configured)) return DEFAULT_OPENAI_RETRY_DELAY_MS;
   return Math.max(0, Math.min(Math.floor(configured), 5000));
 }
 
@@ -189,57 +179,6 @@ function isRateLimitError(err: unknown): boolean {
 
 function formatLabel(value: string): string {
   return value.replace(/_/g, ' ');
-}
-
-function clean(value: string | undefined | null): string {
-  return String(value ?? '').trim();
-}
-
-
-
-// function validateGenerationInput(input: WhisperGenerationInput): void {
-//   if (!clean(input.prompt)) {
-//     throw new OpenAiGenerationError(
-//       'Prompt is required to generate a WhisperWrap.',
-//       400,
-//       'missing_prompt',
-//     );
-//   }
-
-//   if (clean(input.prompt).length < 10) {
-//     throw new OpenAiGenerationError(
-//       'Prompt is too short. Please describe what the WhisperWrap should say.',
-//       400,
-//       'prompt_too_short',
-//     );
-//   }
-
-//   if (clean(input.prompt).length > 2000) {
-//     throw new OpenAiGenerationError(
-//       'Prompt is too long. Please keep it under 2,000 characters.',
-//       400,
-//       'prompt_too_long',
-//     );
-//   }
-
-//   if (!clean(input.recipientName)) {
-//     throw new OpenAiGenerationError(
-//       'Recipient name is required.',
-//       400,
-//       'missing_recipient_name',
-//     );
-//   }
-
-//   if (!clean(input.senderIntent)) {
-//     throw new OpenAiGenerationError(
-//       'Sender intent is required.',
-//       400,
-//       'missing_sender_intent',
-//     );
-//   }
-// }
-function getPrompt(input: WhisperGenerationInput): string {
-  return clean(input.prompt || input.senderIntent);
 }
 
 function validateGenerationInput(input: WhisperGenerationInput): void {
@@ -277,6 +216,7 @@ function validateGenerationInput(input: WhisperGenerationInput): void {
     );
   }
 }
+
 function fallbackScripture(
   input: WhisperGenerationInput,
 ): Pick<GeneratedWhisper, 'scriptureReference' | 'scriptureText'> {
@@ -334,10 +274,12 @@ function generateFallbackWhisperContent(input: WhisperGenerationInput): Generate
 }
 
 function buildWhisperPrompt(input: WhisperGenerationInput): string {
+  const formPrompt = getPrompt(input);
+
   return `
 The sender wrote this prompt from the WhisperWrap form:
 
-"${clean(input.prompt)}"
+"${formPrompt}"
 
 Use the form details below to shape the message.
 
