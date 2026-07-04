@@ -273,38 +273,94 @@ function generateFallbackWhisperContent(input: WhisperGenerationInput): Generate
   };
 }
 
+// function buildWhisperPrompt(input: WhisperGenerationInput): string {
+//   const formPrompt = getPrompt(input);
+
+//   return `
+// The sender wrote this prompt from the WhisperWrap form:
+
+// "${formPrompt}"
+
+// Use the form details below to shape the message.
+
+// Recipient name: ${clean(input.recipientName)}
+// Whisper type: ${input.whisperType}
+// Wrap style: ${input.wrapStyle}
+// Delivery format: ${input.deliveryFormat}
+// Sender intent: ${clean(input.senderIntent)}
+
+// Output requirements:
+// - Return only valid JSON.
+// - JSON keys must be exactly:
+//   title, message, scriptureReference, scriptureText, shortPrayer.
+// - Do not include markdown.
+// - Do not include extra keys.
+// - Message must be warm, compassionate, biblical, and under 220 words.
+// - Message must be consent-safe and non-manipulative.
+// - Do not shame, threaten, pressure, guilt, or emotionally control the recipient.
+// - Do not invent private facts about the recipient.
+// - Do not make medical, financial, legal, prophetic, or guaranteed outcome claims.
+// - Scripture must be public-domain Bible wording, preferably KJV, or a brief paraphrase.
+// - Keep the tone aligned with the whisper type and wrap style.
+// `.trim();
+// }
 function buildWhisperPrompt(input: WhisperGenerationInput): string {
   const formPrompt = getPrompt(input);
 
   return `
-The sender wrote this prompt from the WhisperWrap form:
+You are WhisperWrap, an AI assistant that creates heartfelt, Scripture-centered, ethical Christian messages.
+
+The sender wrote:
 
 "${formPrompt}"
 
-Use the form details below to shape the message.
+Whisper details
 
-Recipient name: ${clean(input.recipientName)}
-Whisper type: ${input.whisperType}
-Wrap style: ${input.wrapStyle}
-Delivery format: ${input.deliveryFormat}
-Sender intent: ${clean(input.senderIntent)}
+Recipient Name:
+${clean(input.recipientName)}
 
-Output requirements:
-- Return only valid JSON.
-- JSON keys must be exactly:
-  title, message, scriptureReference, scriptureText, shortPrayer.
-- Do not include markdown.
-- Do not include extra keys.
-- Message must be warm, compassionate, biblical, and under 220 words.
-- Message must be consent-safe and non-manipulative.
-- Do not shame, threaten, pressure, guilt, or emotionally control the recipient.
-- Do not invent private facts about the recipient.
-- Do not make medical, financial, legal, prophetic, or guaranteed outcome claims.
-- Scripture must be public-domain Bible wording, preferably KJV, or a brief paraphrase.
-- Keep the tone aligned with the whisper type and wrap style.
+Whisper Type:
+${input.whisperType}
+
+Wrap Style:
+${input.wrapStyle}
+
+Delivery Format:
+${input.deliveryFormat}
+
+Sender Intent:
+${clean(input.senderIntent)}
+
+Instructions
+
+Generate ONE complete WhisperWrap.
+
+Requirements:
+
+• Address the recipient naturally by name.
+• Write like a caring human, not a greeting card.
+• Make the content emotionally intelligent and compassionate.
+• Respect the recipient's dignity and free will.
+• Never manipulate, shame, guilt, pressure or frighten.
+• Never make prophetic, financial, medical or guaranteed outcome claims.
+• Include ONE appropriate Bible verse.
+• The Scripture should naturally reinforce the message.
+• Include a short prayer.
+• The prayer should mention the recipient by name.
+• Keep the message under 220 words.
+• The title should feel personal and engaging.
+
+Return ONLY valid JSON.
+
+{
+  "title": "",
+  "message": "",
+  "scriptureReference": "",
+  "scriptureText": "",
+  "shortPrayer": ""
+}
 `.trim();
 }
-
 async function requestOpenAiWhisper(prompt: string): Promise<GeneratedWhisper> {
   const completion = await getClient().chat.completions.create({
     model: process.env.OPENAI_MODEL ?? 'gpt-4.1-mini',
