@@ -149,7 +149,11 @@ async function createAudioReadUrl(audioPath?: string | null): Promise<string | n
 export async function generateWhisper(req: Request, res: Response) {
   try {
     const input = createSchema.parse(req.body);
-    const content = await generateWhisperContent(input);
+    const generationInput = {
+      ...input,
+      senderName: senderName(req), // derive from authenticated user
+    };
+        const content = await generateWhisperContent(input);
 
     if (!req.user?.uid) {
       return res.status(200).json({
