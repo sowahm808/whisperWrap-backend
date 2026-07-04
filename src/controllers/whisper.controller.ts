@@ -47,6 +47,7 @@ const createSchema = z
     ]),
     deliveryFormat: z.enum(['text', 'audio', 'text_audio']),
     senderIntent: z.string().trim().min(5).max(600),
+    senderName: z.string().trim().min(1).max(80).optional(),
   })
   .refine(data => !!data.recipientEmail || !!data.recipientPhone, {
     message: 'Recipient email or phone is required',
@@ -90,12 +91,8 @@ function errorPayload(error: string, message = error, code?: string) {
   return { error, message, ...(code ? { code } : {}) };
 }
 
-function senderName(req: Request): string {
-  return (
-    req.user?.name?.trim() ||
-    req.user?.email?.split('@')[0] ||
-    'A friend'
-  );
+function senderName(req: Request, fallback?: string): string {
+  return req.user?.name?.trim() || req.user?.email?.trim() || fallback?.trim() || 'A friend';
 }
 
 async function loadOwnedWhisper(whisperId: string, uid?: string) {
@@ -152,6 +149,7 @@ async function createAudioReadUrl(audioPath?: string | null): Promise<string | n
 
 export async function generateWhisper(req: Request, res: Response) {
   try {
+<<<<<<< HEAD
    const input = createSchema.parse(req.body);
 
 const generationInput = {
@@ -160,6 +158,14 @@ const generationInput = {
 };
 
 const content = await generateWhisperContent(generationInput);
+=======
+    const input = createSchema.parse(req.body);
+    const generationInput = {
+      ...input,
+      senderName: senderName(req, input.senderName),
+    };
+    const content = await generateWhisperContent(generationInput);
+>>>>>>> e72730562ee95569583fce9c02107db9a80ceab8
 
     if (!req.user?.uid) {
       return res.status(200).json({
@@ -175,7 +181,7 @@ const content = await generateWhisperContent(generationInput);
       ...input,
       recipientEmail: input.recipientEmail ?? null,
       recipientPhone: input.recipientPhone ?? null,
-      senderName: senderName(req),
+      senderName: generationInput.senderName,
       userId: req.user.uid,
       generatedContent: content,
       audioPath: null,
