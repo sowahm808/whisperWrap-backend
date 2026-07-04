@@ -1,6 +1,11 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
-import { DeliveryFormat, GeneratedWhisper, WhisperType, WrapStyle } from '../types/whisper.types.js';
+import {
+  DeliveryFormat,
+  GeneratedWhisper,
+  WhisperType,
+  WrapStyle,
+} from '../types/whisper.types.js';
 
 const responseSchema = z.object({
   title: z.string().trim().min(5).max(90),
@@ -20,6 +25,12 @@ type WhisperGenerationInput = {
   wrapStyle: WrapStyle;
   deliveryFormat: DeliveryFormat;
   senderIntent: string;
+
+  /**
+   * This comes from the frontend form.
+   * Example: "Write a comforting message for my friend who lost his job."
+   */
+  prompt: string;
 };
 
 type OpenAIErrorLike = {
@@ -40,11 +51,22 @@ export class OpenAiGenerationError extends Error {
 }
 
 let client: OpenAI | null = null;
+
 function getClient(): OpenAI {
   if (!process.env.OPENAI_API_KEY) {
-    throw new OpenAiGenerationError('OpenAI is not configured. Please set OPENAI_API_KEY on the backend.', 503, 'openai_not_configured');
+    throw new OpenAiGenerationError(
+      'OpenAI is not configured. Please set OPENAI_API_KEY on the backend.',
+      503,
+      'openai_not_configured',
+    );
   }
-  if (!client) client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  if (!client) {
+    client = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
+  }
+
   return client;
 }
 
@@ -54,18 +76,31 @@ function parseOpenAiJson(content: string): GeneratedWhisper {
   try {
     decoded = JSON.parse(content);
   } catch {
-    throw new OpenAiGenerationError('The AI service returned an invalid response. Please try again.', 502, 'openai_invalid_json');
+    throw new OpenAiGenerationError(
+      'The AI service returned an invalid response. Please try again.',
+      502,
+      'openai_invalid_json',
+    );
   }
 
   const parsed = responseSchema.safeParse(decoded);
+
   if (!parsed.success) {
-    throw new OpenAiGenerationError('The AI service returned incomplete WhisperWrap content. Please try again.', 502, 'openai_invalid_schema');
+    throw new OpenAiGenerationError(
+      'The AI service returned incomplete WhisperWrap content. Please try again.',
+      502,
+      'openai_invalid_schema',
+    );
   }
+
   return parsed.data;
 }
 
 function asOpenAIError(err: unknown): OpenAIErrorLike {
-  if (err && typeof err === 'object') return err as OpenAIErrorLike;
+  if (err && typeof err === 'object') {
+    return err as OpenAIErrorLike;
+  }
+
   return {};
 }
 
@@ -77,33 +112,61 @@ function toGenerationError(err: unknown): OpenAiGenerationError {
   const code = openAiError.code ?? 'openai_request_failed';
 
   if (status === 401) {
-    return new OpenAiGenerationError('OpenAI rejected the backend API key. Please check OPENAI_API_KEY.', 503, 'openai_auth_failed');
+    return new OpenAiGenerationError(
+      'OpenAI rejected the backend API key. Please check OPENAI_API_KEY.',
+      503,
+      'openai_auth_failed',
+    );
   }
 
   if (status === 429) {
-    return new OpenAiGenerationError('The AI service is rate limited right now. Please try again shortly.', 429, 'openai_rate_limited');
+    return new OpenAiGenerationError(
+      'The AI service is rate limited right now. Please try again shortly.',
+      429,
+      'openai_rate_limited',
+    );
   }
 
   if (status && status >= 500) {
-    return new OpenAiGenerationError('The AI service is temporarily unavailable. Please try again.', 502, code);
+    return new OpenAiGenerationError(
+      'The AI service is temporarily unavailable. Please try again.',
+      502,
+      code,
+    );
   }
 
   if (status && status >= 400) {
-    return new OpenAiGenerationError('The AI service could not generate that WhisperWrap. Please revise the details and try again.', 400, code);
+    return new OpenAiGenerationError(
+      'The AI service could not generate that WhisperWrap. Please revise the details and try again.',
+      400,
+      code,
+    );
   }
 
-  return new OpenAiGenerationError('Failed to contact the AI service. Please try again.', 502, code);
+  return new OpenAiGenerationError(
+    'Failed to contact the AI service. Please try again.',
+    502,
+    code,
+  );
 }
 
 function retryAttempts(): number {
   const configured = Number(process.env.OPENAI_RETRY_ATTEMPTS);
-  if (!Number.isFinite(configured)) return DEFAULT_OPENAI_RETRY_ATTEMPTS;
+
+  if (!Number.isFinite(configured)) {
+    return DEFAULT_OPENAI_RETRY_ATTEMPTS;
+  }
+
   return Math.max(0, Math.min(Math.floor(configured), 5));
 }
 
 function retryDelayMs(): number {
   const configured = Number(process.env.OPENAI_RETRY_DELAY_MS);
-  if (!Number.isFinite(configured)) return DEFAULT_OPENAI_RETRY_DELAY_MS;
+
+  if (!Number.isFinite(configured)) {
+    return DEFAULT_OPENAI_RETRY_DELAY_MS;
+  }
+
   return Math.max(0, Math.min(Math.floor(configured), 5000));
 }
 
@@ -128,36 +191,95 @@ function formatLabel(value: string): string {
   return value.replace(/_/g, ' ');
 }
 
-function fallbackScripture(input: WhisperGenerationInput): Pick<GeneratedWhisper, 'scriptureReference' | 'scriptureText'> {
+function clean(value: string | undefined | null): string {
+  return String(value ?? '').trim();
+}
+
+function validateGenerationInput(input: WhisperGenerationInput): void {
+  if (!clean(input.prompt)) {
+    throw new OpenAiGenerationError(
+      'Prompt is required to generate a WhisperWrap.',
+      400,
+      'missing_prompt',
+    );
+  }
+
+  if (clean(input.prompt).length < 10) {
+    throw new OpenAiGenerationError(
+      'Prompt is too short. Please describe what the WhisperWrap should say.',
+      400,
+      'prompt_too_short',
+    );
+  }
+
+  if (clean(input.prompt).length > 2000) {
+    throw new OpenAiGenerationError(
+      'Prompt is too long. Please keep it under 2,000 characters.',
+      400,
+      'prompt_too_long',
+    );
+  }
+
+  if (!clean(input.recipientName)) {
+    throw new OpenAiGenerationError(
+      'Recipient name is required.',
+      400,
+      'missing_recipient_name',
+    );
+  }
+
+  if (!clean(input.senderIntent)) {
+    throw new OpenAiGenerationError(
+      'Sender intent is required.',
+      400,
+      'missing_sender_intent',
+    );
+  }
+}
+
+function fallbackScripture(
+  input: WhisperGenerationInput,
+): Pick<GeneratedWhisper, 'scriptureReference' | 'scriptureText'> {
   if (input.whisperType === 'comfort' || input.wrapStyle === 'healing') {
     return {
       scriptureReference: 'Psalm 34:18',
-      scriptureText: 'The Lord is nigh unto them that are of a broken heart; and saveth such as be of a contrite spirit.',
+      scriptureText:
+        'The Lord is nigh unto them that are of a broken heart; and saveth such as be of a contrite spirit.',
     };
   }
 
-  if (input.whisperType === 'forgiveness' || input.whisperType === 'apology' || input.wrapStyle === 'reconciliation') {
+  if (
+    input.whisperType === 'forgiveness' ||
+    input.whisperType === 'apology' ||
+    input.wrapStyle === 'reconciliation'
+  ) {
     return {
       scriptureReference: 'Colossians 3:13',
-      scriptureText: 'Forbearing one another, and forgiving one another, even as Christ forgave you, so also do ye.',
+      scriptureText:
+        'Forbearing one another, and forgiving one another, even as Christ forgave you, so also do ye.',
     };
   }
 
-  if (input.whisperType === 'congratulations' || input.wrapStyle === 'celebration') {
+  if (
+    input.whisperType === 'congratulations' ||
+    input.wrapStyle === 'celebration'
+  ) {
     return {
       scriptureReference: 'Psalm 118:24',
-      scriptureText: 'This is the day which the Lord hath made; we will rejoice and be glad in it.',
+      scriptureText:
+        'This is the day which the Lord hath made; we will rejoice and be glad in it.',
     };
   }
 
   return {
     scriptureReference: 'Numbers 6:24-26',
-    scriptureText: 'The Lord bless thee, and keep thee: the Lord make his face shine upon thee, and give thee peace.',
+    scriptureText:
+      'The Lord bless thee, and keep thee: the Lord make his face shine upon thee, and give thee peace.',
   };
 }
 
 function generateFallbackWhisperContent(input: WhisperGenerationInput): GeneratedWhisper {
-  const recipientName = input.recipientName.trim();
+  const recipientName = clean(input.recipientName);
   const style = formatLabel(input.wrapStyle);
   const type = formatLabel(input.whisperType);
   const scripture = fallbackScripture(input);
@@ -171,6 +293,36 @@ function generateFallbackWhisperContent(input: WhisperGenerationInput): Generate
   };
 }
 
+function buildWhisperPrompt(input: WhisperGenerationInput): string {
+  return `
+The sender wrote this prompt from the WhisperWrap form:
+
+"${clean(input.prompt)}"
+
+Use the form details below to shape the message.
+
+Recipient name: ${clean(input.recipientName)}
+Whisper type: ${input.whisperType}
+Wrap style: ${input.wrapStyle}
+Delivery format: ${input.deliveryFormat}
+Sender intent: ${clean(input.senderIntent)}
+
+Output requirements:
+- Return only valid JSON.
+- JSON keys must be exactly:
+  title, message, scriptureReference, scriptureText, shortPrayer.
+- Do not include markdown.
+- Do not include extra keys.
+- Message must be warm, compassionate, biblical, and under 220 words.
+- Message must be consent-safe and non-manipulative.
+- Do not shame, threaten, pressure, guilt, or emotionally control the recipient.
+- Do not invent private facts about the recipient.
+- Do not make medical, financial, legal, prophetic, or guaranteed outcome claims.
+- Scripture must be public-domain Bible wording, preferably KJV, or a brief paraphrase.
+- Keep the tone aligned with the whisper type and wrap style.
+`.trim();
+}
+
 async function requestOpenAiWhisper(prompt: string): Promise<GeneratedWhisper> {
   const completion = await getClient().chat.completions.create({
     model: process.env.OPENAI_MODEL ?? 'gpt-4.1-mini',
@@ -179,35 +331,35 @@ async function requestOpenAiWhisper(prompt: string): Promise<GeneratedWhisper> {
       {
         role: 'system',
         content:
-          'You write compassionate, biblical, clear language for Christian encouragement. Avoid manipulation, shame, medical claims, and guaranteed outcomes.',
+          'You generate safe Christian WhisperWrap messages. Follow the requested JSON schema exactly. Keep the content biblical, ethical, compassionate, consent-safe, and free from manipulation, shame, harassment, medical claims, or guaranteed outcomes.',
       },
-      { role: 'user', content: prompt },
+      {
+        role: 'user',
+        content: prompt,
+      },
     ],
     response_format: { type: 'json_object' },
   });
 
   const content = completion.choices[0]?.message?.content;
-  if (!content) throw new OpenAiGenerationError('The AI service returned an empty response. Please try again.', 502, 'openai_empty_content');
+
+  if (!content) {
+    throw new OpenAiGenerationError(
+      'The AI service returned an empty response. Please try again.',
+      502,
+      'openai_empty_content',
+    );
+  }
 
   return parseOpenAiJson(content);
 }
 
-export async function generateWhisperContent(input: WhisperGenerationInput): Promise<GeneratedWhisper> {
-  const prompt = `Create one original Christian WhisperWrap message for the MVP.
-Recipient name: ${input.recipientName}
-Whisper type: ${input.whisperType}
-Wrap style: ${input.wrapStyle}
-Delivery format: ${input.deliveryFormat}
-Sender intent: ${input.senderIntent}
+export async function generateWhisperContent(
+  input: WhisperGenerationInput,
+): Promise<GeneratedWhisper> {
+  validateGenerationInput(input);
 
-Requirements:
-- Return only valid JSON.
-- JSON keys must be title, message, scriptureReference, scriptureText, shortPrayer.
-- Message must be warm, consent-safe, and under 220 words.
-- Scripture must be a public-domain Bible translation wording or a brief paraphrase.
-- Do not invent private facts about the recipient.
-- Do not include markdown.`;
-
+  const prompt = buildWhisperPrompt(input);
   const attempts = retryAttempts() + 1;
   let lastError: unknown;
 
@@ -216,13 +368,20 @@ Requirements:
       return await requestOpenAiWhisper(prompt);
     } catch (err) {
       lastError = err;
-      if (attempt === attempts || !isRetryableOpenAIError(err)) break;
+
+      if (attempt === attempts || !isRetryableOpenAIError(err)) {
+        break;
+      }
+
       await sleep(retryDelayMs() * attempt);
     }
   }
 
   if (lastError && isRateLimitError(lastError) && rateLimitFallbackEnabled()) {
-    console.warn('OpenAI rate limited WhisperWrap generation; returning local fallback content instead.');
+    console.warn(
+      'OpenAI rate limited WhisperWrap generation; returning local fallback content instead.',
+    );
+
     return generateFallbackWhisperContent(input);
   }
 
