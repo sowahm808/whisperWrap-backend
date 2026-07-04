@@ -91,7 +91,11 @@ function errorPayload(error: string, message = error, code?: string) {
 }
 
 function senderName(req: Request): string {
-  return req.user?.name?.trim() || req.user?.email?.trim() || 'A friend';
+  return (
+    req.user?.name?.trim() ||
+    req.user?.email?.split('@')[0] ||
+    'A friend'
+  );
 }
 
 async function loadOwnedWhisper(whisperId: string, uid?: string) {
@@ -148,12 +152,14 @@ async function createAudioReadUrl(audioPath?: string | null): Promise<string | n
 
 export async function generateWhisper(req: Request, res: Response) {
   try {
-    const input = createSchema.parse(req.body);
-    const generationInput = {
-      ...input,
-      senderName: senderName(req), // derive from authenticated user
-    };
-        const content = await generateWhisperContent(input);
+   const input = createSchema.parse(req.body);
+
+const generationInput = {
+  ...input,
+  senderName: senderName(req),
+};
+
+const content = await generateWhisperContent(generationInput);
 
     if (!req.user?.uid) {
       return res.status(200).json({
