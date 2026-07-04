@@ -195,8 +195,57 @@ function clean(value: string | undefined | null): string {
   return String(value ?? '').trim();
 }
 
+
+
+// function validateGenerationInput(input: WhisperGenerationInput): void {
+//   if (!clean(input.prompt)) {
+//     throw new OpenAiGenerationError(
+//       'Prompt is required to generate a WhisperWrap.',
+//       400,
+//       'missing_prompt',
+//     );
+//   }
+
+//   if (clean(input.prompt).length < 10) {
+//     throw new OpenAiGenerationError(
+//       'Prompt is too short. Please describe what the WhisperWrap should say.',
+//       400,
+//       'prompt_too_short',
+//     );
+//   }
+
+//   if (clean(input.prompt).length > 2000) {
+//     throw new OpenAiGenerationError(
+//       'Prompt is too long. Please keep it under 2,000 characters.',
+//       400,
+//       'prompt_too_long',
+//     );
+//   }
+
+//   if (!clean(input.recipientName)) {
+//     throw new OpenAiGenerationError(
+//       'Recipient name is required.',
+//       400,
+//       'missing_recipient_name',
+//     );
+//   }
+
+//   if (!clean(input.senderIntent)) {
+//     throw new OpenAiGenerationError(
+//       'Sender intent is required.',
+//       400,
+//       'missing_sender_intent',
+//     );
+//   }
+// }
+function getPrompt(input: WhisperGenerationInput): string {
+  return clean(input.prompt || input.senderIntent);
+}
+
 function validateGenerationInput(input: WhisperGenerationInput): void {
-  if (!clean(input.prompt)) {
+  const prompt = getPrompt(input);
+
+  if (!prompt) {
     throw new OpenAiGenerationError(
       'Prompt is required to generate a WhisperWrap.',
       400,
@@ -204,7 +253,7 @@ function validateGenerationInput(input: WhisperGenerationInput): void {
     );
   }
 
-  if (clean(input.prompt).length < 10) {
+  if (prompt.length < 10) {
     throw new OpenAiGenerationError(
       'Prompt is too short. Please describe what the WhisperWrap should say.',
       400,
@@ -212,7 +261,7 @@ function validateGenerationInput(input: WhisperGenerationInput): void {
     );
   }
 
-  if (clean(input.prompt).length > 2000) {
+  if (prompt.length > 2000) {
     throw new OpenAiGenerationError(
       'Prompt is too long. Please keep it under 2,000 characters.',
       400,
@@ -227,16 +276,7 @@ function validateGenerationInput(input: WhisperGenerationInput): void {
       'missing_recipient_name',
     );
   }
-
-  if (!clean(input.senderIntent)) {
-    throw new OpenAiGenerationError(
-      'Sender intent is required.',
-      400,
-      'missing_sender_intent',
-    );
-  }
 }
-
 function fallbackScripture(
   input: WhisperGenerationInput,
 ): Pick<GeneratedWhisper, 'scriptureReference' | 'scriptureText'> {
