@@ -21,6 +21,7 @@ const DEFAULT_OPENAI_RETRY_DELAY_MS = 500;
 
 type WhisperGenerationInput = {
   recipientName: string;
+  senderName?: string;
   whisperType: WhisperType;
   wrapStyle: WrapStyle;
   deliveryFormat: DeliveryFormat;
@@ -78,7 +79,7 @@ function parseOpenAiJson(content: string): GeneratedWhisper {
     decoded = JSON.parse(content);
   } catch {
     throw new OpenAiGenerationError(
-      'The AI service returned an invalid response. Please try again.',
+      'The AI service returned invalid JSON. Please try again.',
       502,
       'openai_invalid_json',
     );
@@ -119,7 +120,7 @@ function toGenerationError(err: unknown): OpenAiGenerationError {
 
   if (status === 429) {
     return new OpenAiGenerationError(
-      'The AI service is rate limited right now. Please try again shortly.',
+      'The AI service is busy right now. Please try again shortly.',
       429,
       'openai_rate_limited',
     );
@@ -160,10 +161,6 @@ function retryDelayMs(): number {
   return Math.max(0, Math.min(Math.floor(configured), 5000));
 }
 
-function rateLimitFallbackEnabled(): boolean {
-  return process.env.OPENAI_RATE_LIMIT_FALLBACK !== 'false';
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -173,16 +170,10 @@ function isRetryableOpenAIError(err: unknown): boolean {
   return typeof status === 'number' && RETRYABLE_OPENAI_STATUSES.has(status);
 }
 
-function isRateLimitError(err: unknown): boolean {
-  return asOpenAIError(err).status === 429;
-}
-
-function formatLabel(value: string): string {
-  return value.replace(/_/g, ' ');
-}
-
 function validateGenerationInput(input: WhisperGenerationInput): void {
   const prompt = getPrompt(input);
+  const recipientName = clean(input.recipientName);
+  const senderName = clean(input.senderName);
 
   if (!prompt) {
     throw new OpenAiGenerationError(
@@ -208,150 +199,63 @@ function validateGenerationInput(input: WhisperGenerationInput): void {
     );
   }
 
-  if (!clean(input.recipientName)) {
+  if (!recipientName) {
     throw new OpenAiGenerationError(
       'Recipient name is required.',
       400,
       'missing_recipient_name',
     );
   }
+
+  if (!senderName) {
+    throw new OpenAiGenerationError(
+      'Sender name is required.',
+      400,
+      'missing_sender_name',
+    );
+  }
 }
 
-function fallbackScripture(
-  input: WhisperGenerationInput,
-): Pick<GeneratedWhisper, 'scriptureReference' | 'scriptureText'> {
-  if (input.whisperType === 'comfort' || input.wrapStyle === 'healing') {
-    return {
-      scriptureReference: 'Psalm 34:18',
-      scriptureText:
-        'The Lord is nigh unto them that are of a broken heart; and saveth such as be of a contrite spirit.',
-    };
-  }
-
-  if (
-    input.whisperType === 'forgiveness' ||
-    input.whisperType === 'apology' ||
-    input.wrapStyle === 'reconciliation'
-  ) {
-    return {
-      scriptureReference: 'Colossians 3:13',
-      scriptureText:
-        'Forbearing one another, and forgiving one another, even as Christ forgave you, so also do ye.',
-    };
-  }
-
-  if (
-    input.whisperType === 'congratulations' ||
-    input.wrapStyle === 'celebration'
-  ) {
-    return {
-      scriptureReference: 'Psalm 118:24',
-      scriptureText:
-        'This is the day which the Lord hath made; we will rejoice and be glad in it.',
-    };
-  }
-
-  return {
-    scriptureReference: 'Numbers 6:24-26',
-    scriptureText:
-      'The Lord bless thee, and keep thee: the Lord make his face shine upon thee, and give thee peace.',
-  };
-}
-
-function generateFallbackWhisperContent(input: WhisperGenerationInput): GeneratedWhisper {
-  const recipientName = clean(input.recipientName);
-  const style = formatLabel(input.wrapStyle);
-  const type = formatLabel(input.whisperType);
-  const scripture = fallbackScripture(input);
-
-  return {
-    title: `A ${style} WhisperWrap for ${recipientName}`,
-    message: `${recipientName}, this ${type} message is sent with care and prayer. May you feel steadied by God's nearness today, held by grace, and encouraged to take the next faithful step at your own pace. You are not being rushed or pressured here; this is simply a warm reminder that your life matters deeply to God and to those who are cheering you on.`,
-    scriptureReference: scripture.scriptureReference,
-    scriptureText: scripture.scriptureText,
-    shortPrayer: `Lord, bless ${recipientName} with peace, wisdom, courage, and a clear sense of Your gentle presence today. Amen.`,
-  };
-}
-
-// function buildWhisperPrompt(input: WhisperGenerationInput): string {
-//   const formPrompt = getPrompt(input);
-
-//   return `
-// The sender wrote this prompt from the WhisperWrap form:
-
-// "${formPrompt}"
-
-// Use the form details below to shape the message.
-
-// Recipient name: ${clean(input.recipientName)}
-// Whisper type: ${input.whisperType}
-// Wrap style: ${input.wrapStyle}
-// Delivery format: ${input.deliveryFormat}
-// Sender intent: ${clean(input.senderIntent)}
-
-// Output requirements:
-// - Return only valid JSON.
-// - JSON keys must be exactly:
-//   title, message, scriptureReference, scriptureText, shortPrayer.
-// - Do not include markdown.
-// - Do not include extra keys.
-// - Message must be warm, compassionate, biblical, and under 220 words.
-// - Message must be consent-safe and non-manipulative.
-// - Do not shame, threaten, pressure, guilt, or emotionally control the recipient.
-// - Do not invent private facts about the recipient.
-// - Do not make medical, financial, legal, prophetic, or guaranteed outcome claims.
-// - Scripture must be public-domain Bible wording, preferably KJV, or a brief paraphrase.
-// - Keep the tone aligned with the whisper type and wrap style.
-// `.trim();
-// }
 function buildWhisperPrompt(input: WhisperGenerationInput): string {
+  const recipientName = clean(input.recipientName);
+  const senderName = clean(input.senderName);
   const formPrompt = getPrompt(input);
 
   return `
 You are WhisperWrap, an AI assistant that creates heartfelt, Scripture-centered, ethical Christian messages.
 
-The sender wrote:
+The sender wrote this request:
 
 "${formPrompt}"
 
-Whisper details
-
-Recipient Name:
-${clean(input.recipientName)}
-
-Whisper Type:
-${input.whisperType}
-
-Wrap Style:
-${input.wrapStyle}
-
-Delivery Format:
-${input.deliveryFormat}
-
-Sender Intent:
-${clean(input.senderIntent)}
-
-Instructions
+Whisper details:
+Recipient Name: ${recipientName}
+Sender Name: ${senderName}
+Whisper Type: ${input.whisperType}
+Wrap Style: ${input.wrapStyle}
+Delivery Format: ${input.deliveryFormat}
+Sender Intent: ${clean(input.senderIntent)}
 
 Generate ONE complete WhisperWrap.
 
 Requirements:
+- The message must begin exactly with: "Whisper from ${senderName}:"
+- After that opening, address ${recipientName} naturally by name.
+- Do not use placeholders.
+- Do not invent private facts.
+- Do not mention that you are AI.
+- Write like a caring human, not a greeting card.
+- Keep the content emotionally intelligent, warm, biblical, and compassionate.
+- Respect the recipient's dignity and free will.
+- Never manipulate, shame, guilt, pressure, threaten, or frighten.
+- Never make prophetic, financial, medical, legal, or guaranteed outcome claims.
+- Include one appropriate Bible verse.
+- Scripture must use public-domain wording, preferably KJV, or a brief paraphrase.
+- Include a short prayer that mentions ${recipientName} by name.
+- Keep the message under 220 words.
+- The title should feel personal and engaging.
 
-• Address the recipient naturally by name.
-• Write like a caring human, not a greeting card.
-• Make the content emotionally intelligent and compassionate.
-• Respect the recipient's dignity and free will.
-• Never manipulate, shame, guilt, pressure or frighten.
-• Never make prophetic, financial, medical or guaranteed outcome claims.
-• Include ONE appropriate Bible verse.
-• The Scripture should naturally reinforce the message.
-• Include a short prayer.
-• The prayer should mention the recipient by name.
-• Keep the message under 220 words.
-• The title should feel personal and engaging.
-
-Return ONLY valid JSON.
-
+Return ONLY valid JSON with exactly these keys:
 {
   "title": "",
   "message": "",
@@ -361,6 +265,7 @@ Return ONLY valid JSON.
 }
 `.trim();
 }
+
 async function requestOpenAiWhisper(prompt: string): Promise<GeneratedWhisper> {
   const completion = await getClient().chat.completions.create({
     model: process.env.OPENAI_MODEL ?? 'gpt-4.1-mini',
@@ -369,7 +274,7 @@ async function requestOpenAiWhisper(prompt: string): Promise<GeneratedWhisper> {
       {
         role: 'system',
         content:
-          'You generate safe Christian WhisperWrap messages. Follow the requested JSON schema exactly. Keep the content biblical, ethical, compassionate, consent-safe, and free from manipulation, shame, harassment, medical claims, or guaranteed outcomes.',
+          'You generate safe Christian WhisperWrap messages. Return valid JSON only. Follow the requested schema exactly. Keep the content biblical, ethical, compassionate, consent-safe, and free from manipulation, shame, harassment, medical claims, prophetic guarantees, or guaranteed outcomes.',
       },
       {
         role: 'user',
@@ -413,14 +318,6 @@ export async function generateWhisperContent(
 
       await sleep(retryDelayMs() * attempt);
     }
-  }
-
-  if (lastError && isRateLimitError(lastError) && rateLimitFallbackEnabled()) {
-    console.warn(
-      'OpenAI rate limited WhisperWrap generation; returning local fallback content instead.',
-    );
-
-    return generateFallbackWhisperContent(input);
   }
 
   throw toGenerationError(lastError);
