@@ -140,6 +140,7 @@ Content-Type: application/json
   "whisperType": "encouragement",
   "wrapStyle": "gentle",
   "deliveryFormat": "text_audio",
+  "senderName": "Taylor",
   "senderIntent": "Encourage Jordan before a major life transition."
 }
 ```
@@ -158,7 +159,7 @@ Authenticated response:
 }
 ```
 
-Unauthenticated public preview responses use `200 OK`, return `"whisperId": null`, and include `"persisted": false` with the same generated content fields. Because these previews are not stored, they cannot be sent for consent until the user signs in, has an active subscription, and generates again with a Firebase ID token so the response includes a persisted `whisperId`.
+Unauthenticated public preview responses use `200 OK`, return `"whisperId": null`, and include `"persisted": false` with the same generated content fields. For public preview requests, include `senderName` in the request body so the generated message can identify the sender; authenticated requests may omit it because the backend uses the Firebase user name or email. Because these previews are not stored, they cannot be sent for consent until the user signs in, has an active subscription, and generates again with a Firebase ID token so the response includes a persisted `whisperId`.
 
 ### Load generated WhisperWrap
 
