@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { sendConsentEmail } from '../services/email.service.js';
 import { sendConsentSms } from '../services/sms.service.js';
 import { firebaseAdmin, getFirestore, getStorageBucket } from '../services/firebase.service.js';
-import { OpenAiGenerationError, generateWhisperContent } from '../services/openai.service.js';
+import { GeminiGenerationError, generateWhisperContent } from '../services/gemini.service.js';
 import { tokenService } from '../services/token.service.js';
 import { WhisperRecord, WhisperStatus } from '../types/whisper.types.js';
 
@@ -149,14 +149,14 @@ async function createAudioReadUrl(audioPath?: string | null): Promise<string | n
 
 export async function generateWhisper(req: Request, res: Response) {
   try {
-   const input = createSchema.parse(req.body);
+    const input = createSchema.parse(req.body);
 
-const generationInput = {
-  ...input,
-  senderName: senderName(req),
-};
+    const generationInput = {
+      ...input,
+      senderName: senderName(req),
+    };
 
-const content = await generateWhisperContent(generationInput);
+    const content = await generateWhisperContent(generationInput);
 
     if (!req.user?.uid) {
       return res.status(200).json({
@@ -192,7 +192,7 @@ const content = await generateWhisperContent(generationInput);
   } catch (err) {
     if (err instanceof z.ZodError) return validationError(res, err);
 
-    if (err instanceof OpenAiGenerationError) {
+    if (err instanceof GeminiGenerationError) {
       console.error('generateWhisper AI failed', {
         code: err.code,
         message: err.message,
@@ -257,7 +257,7 @@ export async function regenerateWhisper(req: Request, res: Response) {
   } catch (err) {
     if (err instanceof z.ZodError) return validationError(res, err);
 
-    if (err instanceof OpenAiGenerationError) {
+    if (err instanceof GeminiGenerationError) {
       return res
         .status(err.statusCode)
         .json(errorPayload('Failed to regenerate whisper', err.message, err.code));

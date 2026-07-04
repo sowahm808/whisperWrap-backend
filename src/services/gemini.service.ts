@@ -1,4 +1,3 @@
-import OpenAI from 'openai';
 import { z } from 'zod';
 import {
   DeliveryFormat,
@@ -15,9 +14,11 @@ const responseSchema = z.object({
   shortPrayer: z.string().trim().min(5).max(500),
 });
 
-const RETRYABLE_OPENAI_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504]);
-const DEFAULT_OPENAI_RETRY_ATTEMPTS = 2;
-const DEFAULT_OPENAI_RETRY_DELAY_MS = 500;
+const RETRYABLE_GEMINI_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504]);
+const DEFAULT_GEMINI_RETRY_ATTEMPTS = 2;
+const DEFAULT_GEMINI_RETRY_DELAY_MS = 500;
+const DEFAULT_GEMINI_MODEL = 'gemini-1.5-flash';
+const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
 type WhisperGenerationInput = {
   recipientName: string;
@@ -29,39 +30,54 @@ type WhisperGenerationInput = {
   prompt?: string;
 };
 
-type OpenAIErrorLike = {
-  status?: number;
-  code?: string;
-  message?: string;
+type GeminiErrorResponse = {
+  error?: {
+    code?: number;
+    message?: string;
+    status?: string;
+  };
 };
 
-export class OpenAiGenerationError extends Error {
+type GeminiResponse = {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{ text?: string }>;
+    };
+  }>;
+};
+
+type GeminiRequestError = Error & {
+  status?: number;
+  code?: string;
+};
+
+export class GeminiGenerationError extends Error {
   constructor(
     message: string,
     public readonly statusCode: number,
     public readonly code: string,
   ) {
     super(message);
-    this.name = 'OpenAiGenerationError';
+    this.name = 'GeminiGenerationError';
   }
 }
 
-let client: OpenAI | null = null;
+function apiKey(): string {
+  const key = process.env.GEMINI_API_KEY?.trim();
 
-function getClient(): OpenAI {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new OpenAiGenerationError(
-      'OpenAI is not configured. Please set OPENAI_API_KEY on the backend.',
+  if (!key) {
+    throw new GeminiGenerationError(
+      'Gemini is not configured. Please set GEMINI_API_KEY on the backend.',
       503,
-      'openai_not_configured',
+      'gemini_not_configured',
     );
   }
 
-  if (!client) {
-    client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  }
+  return key;
+}
 
-  return client;
+function modelName(): string {
+  return process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
 }
 
 function clean(value: string | undefined | null): string {
@@ -72,62 +88,62 @@ function getPrompt(input: WhisperGenerationInput): string {
   return clean(input.prompt || input.senderIntent);
 }
 
-function parseOpenAiJson(content: string): GeneratedWhisper {
+function parseGeminiJson(content: string): GeneratedWhisper {
   let decoded: unknown;
 
   try {
     decoded = JSON.parse(content);
   } catch {
-    throw new OpenAiGenerationError(
+    throw new GeminiGenerationError(
       'The AI service returned invalid JSON. Please try again.',
       502,
-      'openai_invalid_json',
+      'gemini_invalid_json',
     );
   }
 
   const parsed = responseSchema.safeParse(decoded);
 
   if (!parsed.success) {
-    throw new OpenAiGenerationError(
+    throw new GeminiGenerationError(
       'The AI service returned incomplete WhisperWrap content. Please try again.',
       502,
-      'openai_invalid_schema',
+      'gemini_invalid_schema',
     );
   }
 
   return parsed.data;
 }
 
-function asOpenAIError(err: unknown): OpenAIErrorLike {
-  if (err && typeof err === 'object') return err as OpenAIErrorLike;
-  return {};
+function asGeminiRequestError(err: unknown): GeminiRequestError | undefined {
+  if (err instanceof Error) return err as GeminiRequestError;
+  return undefined;
 }
 
-function toGenerationError(err: unknown): OpenAiGenerationError {
-  if (err instanceof OpenAiGenerationError) return err;
+function toGenerationError(err: unknown): GeminiGenerationError {
+  if (err instanceof GeminiGenerationError) return err;
 
-  const openAiError = asOpenAIError(err);
-  const status = openAiError.status;
-  const code = openAiError.code ?? 'openai_request_failed';
+  const geminiError = asGeminiRequestError(err);
+  const status = geminiError?.status;
+  const code = geminiError?.code ?? 'gemini_request_failed';
 
-  if (status === 401) {
-    return new OpenAiGenerationError(
-      'OpenAI rejected the backend API key. Please check OPENAI_API_KEY.',
+  if (status === 400 || status === 403) {
+    return new GeminiGenerationError(
+      'Gemini rejected the backend API key or request. Please check GEMINI_API_KEY and GEMINI_MODEL.',
       503,
-      'openai_auth_failed',
+      'gemini_auth_failed',
     );
   }
 
   if (status === 429) {
-    return new OpenAiGenerationError(
+    return new GeminiGenerationError(
       'The AI service is busy right now. Please try again shortly.',
       429,
-      'openai_rate_limited',
+      'gemini_rate_limited',
     );
   }
 
   if (status && status >= 500) {
-    return new OpenAiGenerationError(
+    return new GeminiGenerationError(
       'The AI service is temporarily unavailable. Please try again.',
       502,
       code,
@@ -135,14 +151,14 @@ function toGenerationError(err: unknown): OpenAiGenerationError {
   }
 
   if (status && status >= 400) {
-    return new OpenAiGenerationError(
+    return new GeminiGenerationError(
       'The AI service could not generate that WhisperWrap. Please revise the details and try again.',
       400,
       code,
     );
   }
 
-  return new OpenAiGenerationError(
+  return new GeminiGenerationError(
     'Failed to contact the AI service. Please try again.',
     502,
     code,
@@ -150,14 +166,14 @@ function toGenerationError(err: unknown): OpenAiGenerationError {
 }
 
 function retryAttempts(): number {
-  const configured = Number(process.env.OPENAI_RETRY_ATTEMPTS);
-  if (!Number.isFinite(configured)) return DEFAULT_OPENAI_RETRY_ATTEMPTS;
+  const configured = Number(process.env.GEMINI_RETRY_ATTEMPTS);
+  if (!Number.isFinite(configured)) return DEFAULT_GEMINI_RETRY_ATTEMPTS;
   return Math.max(0, Math.min(Math.floor(configured), 5));
 }
 
 function retryDelayMs(): number {
-  const configured = Number(process.env.OPENAI_RETRY_DELAY_MS);
-  if (!Number.isFinite(configured)) return DEFAULT_OPENAI_RETRY_DELAY_MS;
+  const configured = Number(process.env.GEMINI_RETRY_DELAY_MS);
+  if (!Number.isFinite(configured)) return DEFAULT_GEMINI_RETRY_DELAY_MS;
   return Math.max(0, Math.min(Math.floor(configured), 5000));
 }
 
@@ -165,9 +181,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function isRetryableOpenAIError(err: unknown): boolean {
-  const status = asOpenAIError(err).status;
-  return typeof status === 'number' && RETRYABLE_OPENAI_STATUSES.has(status);
+function isRetryableGeminiError(err: unknown): boolean {
+  const status = asGeminiRequestError(err)?.status;
+  return typeof status === 'number' && RETRYABLE_GEMINI_STATUSES.has(status);
 }
 
 function validateGenerationInput(input: WhisperGenerationInput): void {
@@ -176,7 +192,7 @@ function validateGenerationInput(input: WhisperGenerationInput): void {
   const senderName = clean(input.senderName);
 
   if (!prompt) {
-    throw new OpenAiGenerationError(
+    throw new GeminiGenerationError(
       'Prompt is required to generate a WhisperWrap.',
       400,
       'missing_prompt',
@@ -184,7 +200,7 @@ function validateGenerationInput(input: WhisperGenerationInput): void {
   }
 
   if (prompt.length < 10) {
-    throw new OpenAiGenerationError(
+    throw new GeminiGenerationError(
       'Prompt is too short. Please describe what the WhisperWrap should say.',
       400,
       'prompt_too_short',
@@ -192,7 +208,7 @@ function validateGenerationInput(input: WhisperGenerationInput): void {
   }
 
   if (prompt.length > 2000) {
-    throw new OpenAiGenerationError(
+    throw new GeminiGenerationError(
       'Prompt is too long. Please keep it under 2,000 characters.',
       400,
       'prompt_too_long',
@@ -200,19 +216,11 @@ function validateGenerationInput(input: WhisperGenerationInput): void {
   }
 
   if (!recipientName) {
-    throw new OpenAiGenerationError(
-      'Recipient name is required.',
-      400,
-      'missing_recipient_name',
-    );
+    throw new GeminiGenerationError('Recipient name is required.', 400, 'missing_recipient_name');
   }
 
   if (!senderName) {
-    throw new OpenAiGenerationError(
-      'Sender name is required.',
-      400,
-      'missing_sender_name',
-    );
+    throw new GeminiGenerationError('Sender name is required.', 400, 'missing_sender_name');
   }
 }
 
@@ -266,35 +274,55 @@ Return ONLY valid JSON with exactly these keys:
 `.trim();
 }
 
-async function requestOpenAiWhisper(prompt: string): Promise<GeneratedWhisper> {
-  const completion = await getClient().chat.completions.create({
-    model: process.env.OPENAI_MODEL ?? 'gpt-4.1-mini',
-    temperature: 0.7,
-    messages: [
-      {
-        role: 'system',
-        content:
-          'You generate safe Christian WhisperWrap messages. Return valid JSON only. Follow the requested schema exactly. Keep the content biblical, ethical, compassionate, consent-safe, and free from manipulation, shame, harassment, medical claims, prophetic guarantees, or guaranteed outcomes.',
+function extractText(response: GeminiResponse): string | undefined {
+  return response.candidates?.[0]?.content?.parts
+    ?.map(part => part.text)
+    .filter((text): text is string => !!text)
+    .join('')
+    .trim();
+}
+
+async function requestGeminiWhisper(prompt: string): Promise<GeneratedWhisper> {
+  const url = `${GEMINI_API_BASE_URL}/models/${encodeURIComponent(modelName())}:generateContent?key=${encodeURIComponent(apiKey())}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [
+          {
+            text: 'You generate safe Christian WhisperWrap messages. Return valid JSON only. Follow the requested schema exactly. Keep the content biblical, ethical, compassionate, consent-safe, and free from manipulation, shame, harassment, medical claims, prophetic guarantees, or guaranteed outcomes.',
+          },
+        ],
       },
-      {
-        role: 'user',
-        content: prompt,
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.7,
+        responseMimeType: 'application/json',
       },
-    ],
-    response_format: { type: 'json_object' },
+    }),
   });
 
-  const content = completion.choices[0]?.message?.content;
+  const data = (await response.json().catch(() => ({}))) as GeminiResponse & GeminiErrorResponse;
+
+  if (!response.ok) {
+    const error = new Error(data.error?.message || 'Gemini request failed') as GeminiRequestError;
+    error.status = response.status;
+    error.code = data.error?.status?.toLowerCase() || 'gemini_request_failed';
+    throw error;
+  }
+
+  const content = extractText(data);
 
   if (!content) {
-    throw new OpenAiGenerationError(
+    throw new GeminiGenerationError(
       'The AI service returned an empty response. Please try again.',
       502,
-      'openai_empty_content',
+      'gemini_empty_content',
     );
   }
 
-  return parseOpenAiJson(content);
+  return parseGeminiJson(content);
 }
 
 export async function generateWhisperContent(
@@ -308,11 +336,11 @@ export async function generateWhisperContent(
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      return await requestOpenAiWhisper(prompt);
+      return await requestGeminiWhisper(prompt);
     } catch (err) {
       lastError = err;
 
-      if (attempt === attempts || !isRetryableOpenAIError(err)) {
+      if (attempt === attempts || !isRetryableGeminiError(err)) {
         break;
       }
 

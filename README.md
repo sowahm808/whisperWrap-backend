@@ -7,7 +7,7 @@ Production-ready Node.js/Express backend for the WhisperWrap MVP only. ShepherdC
 - Firebase Auth token verification for signup/login flows.
 - Firestore user profiles in `users` with `subscriptionStatus`.
 - Active subscription gate for authenticated sender-only WhisperWrap actions after generation.
-- AI message generation at `POST /api/whispers/generate`, with public preview generation enabled by default.
+- Gemini AI message generation at `POST /api/whispers/generate`, with public preview generation enabled by default.
 - Sender review support: load, edit, regenerate, and confirm generated content before consent is sent.
 - Optional audio delivery through Firebase Storage signed upload and signed read URLs.
 - Consent email delivery through SendGrid at `POST /api/whispers/send-consent`.
@@ -55,11 +55,10 @@ Copy `.env.example` to `.env` and fill in the required values.
 | --- | --- | --- |
 | `PORT` | No | API port. Defaults to `3000`. |
 | `CORS_ORIGIN` | No | Comma-separated frontend origins. Use your Angular/Ionic origin in production. |
-| `OPENAI_API_KEY` | Yes | OpenAI API key for message generation. |
-| `OPENAI_MODEL` | No | OpenAI model override. Defaults to `gpt-4.1-mini`. |
-| `OPENAI_RETRY_ATTEMPTS` | No | Number of retry attempts for transient OpenAI failures. Defaults to `2`; maximum is `5`. |
-| `OPENAI_RETRY_DELAY_MS` | No | Base retry delay for transient OpenAI failures. Defaults to `500`; maximum is `5000`. |
-| `OPENAI_RATE_LIMIT_FALLBACK` | No | Set to `false` to disable local fallback WhisperWrap copy when OpenAI returns a rate-limit response after retries. Enabled by default. |
+| `GEMINI_API_KEY` | Yes | Google Gemini API key for message generation. |
+| `GEMINI_MODEL` | No | Gemini model override. Defaults to `gemini-1.5-flash`. |
+| `GEMINI_RETRY_ATTEMPTS` | No | Number of retry attempts for transient Gemini failures. Defaults to `2`; maximum is `5`. |
+| `GEMINI_RETRY_DELAY_MS` | No | Base retry delay for transient Gemini failures. Defaults to `500`; maximum is `5000`. |
 | `FIREBASE_PROJECT_ID` | Yes | Firebase project ID. |
 | `FIREBASE_CLIENT_EMAIL` | Yes | Firebase service account client email. |
 | `FIREBASE_PRIVATE_KEY` | Yes | Firebase service account private key with escaped newlines. |
