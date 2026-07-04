@@ -46,11 +46,11 @@ Click here to accept and view your message: ${payload.unwrapLink}`;
   const [response] = await sgMail.send({
     to: payload.recipientEmail,
     from,
-    subject: `${senderName} sent you a WhisperWrap`,
+    subject: `${senderName} sent you a Whisper`,
     text,
     html: `
       <p>Hello ${safeRecipientName},</p>
-      <p>${safeSenderName} has sent you a WhisperWrap through WhisperComp.</p>
+      <p>${safeSenderName} has sent you a message through Whisper Pad.</p>
       <p>Would you like to unwrap it?</p>
       <p><a href="${safeLink}">Click here to accept and view your message</a></p>
     `,
