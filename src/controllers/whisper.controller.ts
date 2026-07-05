@@ -1,7 +1,12 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { sendConsentEmail } from '../services/email.service.js';
-import { sendConsentSms } from '../services/sms.service.js';
+import {
+  SmsValidationError,
+  normalizePhoneForSms,
+  sendConsentSms,
+  sendWhisperSms,
+} from '../services/sms.service.js';
 import { firebaseAdmin, getFirestore, getStorageBucket } from '../services/firebase.service.js';
 import { GeminiGenerationError, generateWhisperContent } from '../services/gemini.service.js';
 import { tokenService } from '../services/token.service.js';
@@ -147,12 +152,45 @@ async function createAudioReadUrl(audioPath?: string | null): Promise<string | n
   return url;
 }
 
+async function sendWhisperSmsIfAllowed(
+  docRef: FirebaseFirestore.DocumentReference,
+  whisper: WhisperRecord,
+): Promise<null | Awaited<ReturnType<typeof sendWhisperSms>>> {
+  if (whisper.deliveryFormat !== 'text' && whisper.deliveryFormat !== 'text_audio') return null;
+  if (!whisper.recipientPhone || whisper.smsSentAt) return null;
+
+  const smsResult = await sendWhisperSms({
+    recipientPhone: whisper.recipientPhone,
+    whisper: whisper.generatedContent,
+  });
+
+  await docRef.update({
+    smsSid: smsResult.sid,
+    smsStatus: smsResult.status,
+    smsSentAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return smsResult;
+}
+
+function logSmsError(context: string, error: unknown) {
+  console.error(context, {
+    message: error instanceof Error ? error.message : String(error),
+    name: error instanceof Error ? error.name : undefined,
+  });
+}
+
 export async function generateWhisper(req: Request, res: Response) {
   try {
     const input = createSchema.parse(req.body);
+    const normalizedRecipientPhone = input.recipientPhone
+      ? normalizePhoneForSms(input.recipientPhone)
+      : undefined;
 
     const generationInput = {
       ...input,
+      recipientPhone: normalizedRecipientPhone,
       senderName: senderName(req),
     };
 
@@ -171,7 +209,7 @@ export async function generateWhisper(req: Request, res: Response) {
     const whisper: WhisperRecord = {
       ...input,
       recipientEmail: input.recipientEmail ?? null,
-      recipientPhone: input.recipientPhone ?? null,
+      recipientPhone: normalizedRecipientPhone ?? null,
       senderName: generationInput.senderName,
       userId: req.user.uid,
       generatedContent: content,
@@ -191,6 +229,7 @@ export async function generateWhisper(req: Request, res: Response) {
     });
   } catch (err) {
     if (err instanceof z.ZodError) return validationError(res, err);
+    if (err instanceof SmsValidationError) return res.status(400).json({ error: err.message });
 
     if (err instanceof GeminiGenerationError) {
       console.error('generateWhisper AI failed', {
@@ -529,9 +568,13 @@ export async function sendConsent(req: Request, res: Response) {
           unwrapLink,
         });
       } catch (error) {
-        console.error('Consent SMS failed', error);
-        deliveryErrors.sms =
-          error instanceof Error ? error.message : 'SMS delivery failed';
+        logSmsError('Consent SMS failed', error);
+        if (error instanceof SmsValidationError) return res.status(400).json({ error: error.message });
+
+        return res.status(502).json({
+          error: 'Failed to send consent SMS',
+          message: error instanceof Error ? error.message : 'SMS delivery failed',
+        });
       }
     }
 
@@ -574,6 +617,7 @@ export async function sendConsent(req: Request, res: Response) {
     });
   } catch (err) {
     if (err instanceof z.ZodError) return validationError(res, err);
+    if (err instanceof SmsValidationError) return res.status(400).json({ error: err.message });
 
     console.error('sendConsent failed', err);
 
@@ -608,7 +652,17 @@ export async function acceptWhisper(req: Request, res: Response) {
       await recordRecipientEvent(doc.id, 'accepted');
     }
 
-    return res.json({ success: true, whisperId: doc.id });
+    try {
+      const smsDelivery = await sendWhisperSmsIfAllowed(doc.ref, whisper);
+      return res.json({ success: true, whisperId: doc.id, smsDelivery });
+    } catch (error) {
+      logSmsError('Whisper SMS failed after consent acceptance', error);
+      if (error instanceof SmsValidationError) return res.status(400).json({ error: error.message });
+      return res.status(502).json({
+        error: 'Failed to send Whisper SMS',
+        message: error instanceof Error ? error.message : 'SMS delivery failed',
+      });
+    }
   } catch (err) {
     if (err instanceof z.ZodError) return validationError(res, err);
     console.error('acceptWhisper failed', err);
@@ -643,6 +697,20 @@ export async function unwrapByToken(req: Request, res: Response) {
     if (firstOpen) await recordRecipientEvent(doc.id, 'accepted');
     await recordRecipientEvent(doc.id, 'opened');
 
+    let smsDelivery: Awaited<ReturnType<typeof sendWhisperSms>> | null = null;
+    if (firstOpen) {
+      try {
+        smsDelivery = await sendWhisperSmsIfAllowed(doc.ref, whisper);
+      } catch (error) {
+        logSmsError('Whisper SMS failed during unwrap', error);
+        if (error instanceof SmsValidationError) return res.status(400).json({ error: error.message });
+        return res.status(502).json({
+          error: 'Failed to send Whisper SMS',
+          message: error instanceof Error ? error.message : 'SMS delivery failed',
+        });
+      }
+    }
+
     return res.json({
       whisperId: doc.id,
       recipientName: whisper.recipientName,
@@ -650,7 +718,8 @@ export async function unwrapByToken(req: Request, res: Response) {
       deliveryFormat: whisper.deliveryFormat,
       generatedContent: whisper.generatedContent,
       audioUrl: await createAudioReadUrl(whisper.audioPath),
-      joinLink: 'https://resurgencevibe.com',
+      joinLink: process.env.WHISPERWRAP_JOIN_URL ?? null,
+      smsDelivery,
     });
   } catch (err) {
     if (err instanceof z.ZodError) return validationError(res, err);

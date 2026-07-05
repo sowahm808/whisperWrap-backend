@@ -53,6 +53,9 @@ export interface WhisperRecord {
   acceptedAt?: FirebaseFirestore.FieldValue;
   openedAt?: FirebaseFirestore.FieldValue;
   listenedAt?: FirebaseFirestore.FieldValue;
+  smsSid?: string | null;
+  smsStatus?: string | null;
+  smsSentAt?: FirebaseFirestore.FieldValue;
   createdAt: FirebaseFirestore.FieldValue;
   updatedAt: FirebaseFirestore.FieldValue;
 }
