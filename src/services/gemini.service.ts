@@ -260,7 +260,7 @@ Requirements:
 - Include one appropriate Bible verse.
 - Scripture must use public-domain wording, preferably KJV, or a brief paraphrase.
 - Include a short prayer that mentions ${recipientName} by name.
-- Keep the message under 220 words.
+- Keep the message under 30 words.
 - The title should feel personal and engaging.
 
 Return ONLY valid JSON with exactly these keys:
