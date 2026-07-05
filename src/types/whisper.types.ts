@@ -17,6 +17,8 @@ export type WrapStyle =
 
 export type DeliveryFormat = 'text' | 'audio' | 'text_audio';
 
+export type RecipientGender = 'male' | 'female';
+
 export type WhisperStatus =
   | 'draft'
   | 'generated'
@@ -38,6 +40,8 @@ export interface WhisperRecord {
   userId: string;
   senderName: string;
   recipientName: string;
+  recipientAddressName: string;
+  recipientGender: RecipientGender;
   recipientEmail: string | null;
   recipientPhone?: string | null;
   whisperType: WhisperType;

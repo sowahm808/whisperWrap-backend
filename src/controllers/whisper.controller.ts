@@ -10,7 +10,7 @@ import {
 import { firebaseAdmin, getFirestore, getStorageBucket } from '../services/firebase.service.js';
 import { GeminiGenerationError, generateWhisperContent } from '../services/gemini.service.js';
 import { tokenService } from '../services/token.service.js';
-import { WhisperRecord, WhisperStatus } from '../types/whisper.types.js';
+import { RecipientGender, WhisperRecord, WhisperStatus } from '../types/whisper.types.js';
 
 const phoneSchema = z
   .string()
@@ -30,7 +30,15 @@ const emailSchema = z
 
 const createSchema = z
   .object({
-    recipientName: z.string().trim().min(2).max(80),
+    recipientName: z.string().trim().min(2).max(80).transform(normalizeText),
+    recipientAddressName: z
+      .string()
+      .trim()
+      .max(80)
+      .transform(normalizeText)
+      .optional()
+      .or(z.literal('').transform(() => undefined)),
+    recipientGender: z.enum(['male', 'female']),
     recipientEmail: emailSchema,
     recipientPhone: phoneSchema,
     whisperType: z.enum([
@@ -84,6 +92,33 @@ const uploadSchema = z.object({
   ]),
 });
 
+
+function normalizeText(value: string): string {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+function normalizeRecipientAddressName(
+  recipientAddressName: string | undefined | null,
+  recipientName: string,
+): string {
+  return normalizeText(recipientAddressName || recipientName);
+}
+
+function normalizeRecipientGender(recipientGender: unknown): RecipientGender {
+  return recipientGender === 'female' ? 'female' : 'male';
+}
+
+function withWhisperFallbacks(whisper: WhisperRecord): WhisperRecord {
+  return {
+    ...whisper,
+    recipientAddressName: normalizeRecipientAddressName(
+      whisper.recipientAddressName,
+      whisper.recipientName,
+    ),
+    recipientGender: normalizeRecipientGender(whisper.recipientGender),
+  };
+}
+
 function validationError(res: Response, err: z.ZodError) {
   return res.status(400).json({
     error: 'Validation failed',
@@ -103,9 +138,10 @@ function senderName(req: Request, fallback?: string): string {
 async function loadOwnedWhisper(whisperId: string, uid?: string) {
   const docRef = getFirestore().collection('whispers').doc(whisperId);
   const snapshot = await docRef.get();
-  const whisper = snapshot.data() as WhisperRecord | undefined;
+  const rawWhisper = snapshot.data() as WhisperRecord | undefined;
 
-  if (!whisper) return { status: 404 as const, error: 'Whisper not found' };
+  if (!rawWhisper) return { status: 404 as const, error: 'Whisper not found' };
+  const whisper = withWhisperFallbacks(rawWhisper);
   if (whisper.userId !== uid) return { status: 403 as const, error: 'Forbidden' };
 
   return { status: 200 as const, docRef, whisper };
@@ -128,6 +164,8 @@ function serializeWhisper(whisperId: string, whisper: WhisperRecord) {
   return {
     whisperId,
     recipientName: whisper.recipientName,
+    recipientAddressName: whisper.recipientAddressName,
+    recipientGender: whisper.recipientGender,
     recipientEmail: whisper.recipientEmail ?? null,
     recipientPhone: whisper.recipientPhone ?? null,
     whisperType: whisper.whisperType,
@@ -188,8 +226,14 @@ export async function generateWhisper(req: Request, res: Response) {
       ? normalizePhoneForSms(input.recipientPhone)
       : undefined;
 
+    const recipientAddressName = normalizeRecipientAddressName(
+      input.recipientAddressName,
+      input.recipientName,
+    );
+
     const generationInput = {
       ...input,
+      recipientAddressName,
       recipientPhone: normalizedRecipientPhone,
       senderName: senderName(req),
     };
@@ -200,6 +244,8 @@ export async function generateWhisper(req: Request, res: Response) {
       return res.status(200).json({
         whisperId: null,
         persisted: false,
+        recipientAddressName,
+        recipientGender: input.recipientGender,
         ...content,
       });
     }
@@ -208,6 +254,8 @@ export async function generateWhisper(req: Request, res: Response) {
 
     const whisper: WhisperRecord = {
       ...input,
+      recipientAddressName,
+      recipientGender: input.recipientGender,
       recipientEmail: input.recipientEmail ?? null,
       recipientPhone: normalizedRecipientPhone ?? null,
       senderName: generationInput.senderName,
@@ -225,6 +273,8 @@ export async function generateWhisper(req: Request, res: Response) {
     return res.status(201).json({
       whisperId: docRef.id,
       persisted: true,
+      recipientAddressName,
+      recipientGender: input.recipientGender,
       ...content,
     });
   } catch (err) {
@@ -287,12 +337,19 @@ export async function regenerateWhisper(req: Request, res: Response) {
     const content = await generateWhisperContent(result.whisper);
 
     await result.docRef.update({
+      recipientAddressName: result.whisper.recipientAddressName,
+      recipientGender: result.whisper.recipientGender,
       generatedContent: content,
       status: 'generated',
       updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
     });
 
-    return res.json({ whisperId, ...content });
+    return res.json({
+      whisperId,
+      recipientAddressName: result.whisper.recipientAddressName,
+      recipientGender: result.whisper.recipientGender,
+      ...content,
+    });
   } catch (err) {
     if (err instanceof z.ZodError) return validationError(res, err);
 
@@ -548,7 +605,7 @@ export async function sendConsent(req: Request, res: Response) {
       try {
         deliveryResults.email = await sendConsentEmail({
           recipientEmail: result.whisper.recipientEmail,
-          recipientName: result.whisper.recipientName,
+          recipientName: result.whisper.recipientAddressName,
           senderName: result.whisper.senderName,
           unwrapLink,
         });
@@ -563,7 +620,7 @@ export async function sendConsent(req: Request, res: Response) {
       try {
         deliveryResults.sms = await sendConsentSms({
           recipientPhone: result.whisper.recipientPhone,
-          recipientName: result.whisper.recipientName,
+          recipientName: result.whisper.recipientAddressName,
           senderName: result.whisper.senderName,
           unwrapLink,
         });
@@ -638,7 +695,7 @@ export async function acceptWhisper(req: Request, res: Response) {
 
     if (!doc) return res.status(404).json({ error: 'Invalid or expired link' });
 
-    const whisper = doc.data() as WhisperRecord;
+    const whisper = withWhisperFallbacks(doc.data() as WhisperRecord);
 
     if (!['accepted', 'opened', 'listened'].includes(whisper.status)) {
       const now = firebaseAdmin.firestore.FieldValue.serverTimestamp();
@@ -681,7 +738,7 @@ export async function unwrapByToken(req: Request, res: Response) {
 
     if (!doc) return res.status(404).json({ error: 'Invalid or expired link' });
 
-    const whisper = doc.data() as WhisperRecord;
+    const whisper = withWhisperFallbacks(doc.data() as WhisperRecord);
     const now = firebaseAdmin.firestore.FieldValue.serverTimestamp();
 
     const firstOpen = !['accepted', 'opened', 'listened'].includes(whisper.status);
@@ -714,6 +771,8 @@ export async function unwrapByToken(req: Request, res: Response) {
     return res.json({
       whisperId: doc.id,
       recipientName: whisper.recipientName,
+      recipientAddressName: whisper.recipientAddressName,
+      recipientGender: whisper.recipientGender,
       senderName: whisper.senderName,
       deliveryFormat: whisper.deliveryFormat,
       generatedContent: whisper.generatedContent,
