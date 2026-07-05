@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   DeliveryFormat,
   GeneratedWhisper,
+  RecipientGender,
   WhisperType,
   WrapStyle,
 } from '../types/whisper.types.js';
@@ -22,6 +23,8 @@ const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
 type WhisperGenerationInput = {
   recipientName: string;
+  recipientAddressName?: string;
+  recipientGender?: RecipientGender;
   senderName?: string;
   whisperType: WhisperType;
   wrapStyle: WrapStyle;
@@ -81,7 +84,17 @@ function modelName(): string {
 }
 
 function clean(value: string | undefined | null): string {
-  return String(value ?? '').trim();
+  return String(value ?? '').trim().replace(/\s+/g, ' ');
+}
+
+function addressNameFor(input: WhisperGenerationInput): string {
+  return clean(input.recipientAddressName) || clean(input.recipientName);
+}
+
+function pronounsFor(gender: RecipientGender | undefined) {
+  return gender === 'female'
+    ? { subject: 'she', object: 'her', possessive: 'her' }
+    : { subject: 'he', object: 'him', possessive: 'his' };
 }
 
 function getPrompt(input: WhisperGenerationInput): string {
@@ -189,6 +202,7 @@ function isRetryableGeminiError(err: unknown): boolean {
 function validateGenerationInput(input: WhisperGenerationInput): void {
   const prompt = getPrompt(input);
   const recipientName = clean(input.recipientName);
+  const recipientAddressName = addressNameFor(input);
   const senderName = clean(input.senderName);
 
   if (!prompt) {
@@ -219,6 +233,10 @@ function validateGenerationInput(input: WhisperGenerationInput): void {
     throw new GeminiGenerationError('Recipient name is required.', 400, 'missing_recipient_name');
   }
 
+  if (!recipientAddressName) {
+    throw new GeminiGenerationError('Recipient address name is required.', 400, 'missing_recipient_address_name');
+  }
+
   if (!senderName) {
     throw new GeminiGenerationError('Sender name is required.', 400, 'missing_sender_name');
   }
@@ -226,6 +244,9 @@ function validateGenerationInput(input: WhisperGenerationInput): void {
 
 function buildWhisperPrompt(input: WhisperGenerationInput): string {
   const recipientName = clean(input.recipientName);
+  const recipientAddressName = addressNameFor(input);
+  const recipientGender = input.recipientGender === 'female' ? 'female' : 'male';
+  const pronouns = pronounsFor(recipientGender);
   const senderName = clean(input.senderName);
   const formPrompt = getPrompt(input);
 
@@ -237,8 +258,11 @@ The sender wrote this request:
 "${formPrompt}"
 
 Whisper details:
-Recipient Name: ${recipientName}
-Sender Name: ${senderName}
+Recipient Legal/Familiar Name: ${recipientName}
+Recipient Address Name/Title: ${recipientAddressName}
+Recipient Gender: ${recipientGender}
+Recipient Pronouns: ${pronouns.subject} / ${pronouns.object} / ${pronouns.possessive}
+Sender Name (private context only): ${senderName}
 Whisper Type: ${input.whisperType}
 Wrap Style: ${input.wrapStyle}
 Delivery Format: ${input.deliveryFormat}
@@ -247,8 +271,15 @@ Sender Intent: ${clean(input.senderIntent)}
 Generate ONE complete WhisperWrap.
 
 Requirements:
-- The message must begin exactly with: "Whisper from ${senderName}:"
-- After that opening, address ${recipientName} naturally by name.
+- The message field must start directly and exactly with ${recipientAddressName}.
+- Do not include an introduction before ${recipientAddressName}.
+- Do not announce or re-announce the sender.
+- Do not say "This message is from...".
+- Do not say "${senderName} asked me to tell you...".
+- Do not say "Someone wanted me to share...".
+- Do not say "I am sending this on behalf of...".
+- Use ${senderName} only as private relationship/context, not as an opening announcement.
+- Use ${pronouns.subject}/${pronouns.object}/${pronouns.possessive} pronouns consistently for ${recipientAddressName} when third-person pronouns are needed.
 - Do not use placeholders.
 - Do not invent private facts.
 - Do not mention that you are AI.
@@ -259,8 +290,13 @@ Requirements:
 - Never make prophetic, financial, medical, legal, or guaranteed outcome claims.
 - Include one appropriate Bible verse.
 - Scripture must use public-domain wording, preferably KJV, or a brief paraphrase.
+<<<<<<< HEAD
 - Include a short prayer that mentions ${recipientName} by name.
 - Keep the message under 30 words.
+=======
+- Include a short prayer that mentions ${recipientAddressName} by name or title.
+- Keep the message under 220 words.
+>>>>>>> d2d0c65863e5d4565235eb2ab7582827e4820749
 - The title should feel personal and engaging.
 
 Return ONLY valid JSON with exactly these keys:
