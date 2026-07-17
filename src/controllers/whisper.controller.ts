@@ -57,6 +57,10 @@ const createSchema = z
       'celebration',
       'healing',
       'reconciliation',
+      'gratitude',
+      'romantic',
+      'encouragement',
+      'legacy',
     ]),
     deliveryFormat: z.enum(['text', 'audio', 'text_audio']),
     senderIntent: z.string().trim().min(5).max(600),
@@ -170,6 +174,7 @@ function serializeWhisper(whisperId: string, whisper: WhisperRecord) {
     recipientPhone: whisper.recipientPhone ?? null,
     whisperType: whisper.whisperType,
     wrapStyle: whisper.wrapStyle,
+    wrap_style: whisper.wrapStyle,
     deliveryFormat: whisper.deliveryFormat,
     senderIntent: whisper.senderIntent,
     generatedContent: whisper.generatedContent,
@@ -180,6 +185,7 @@ function serializeWhisper(whisperId: string, whisper: WhisperRecord) {
 
 async function createAudioReadUrl(audioPath?: string | null): Promise<string | null> {
   if (!audioPath) return null;
+  if (/^https?:\/\//i.test(audioPath)) return audioPath;
 
   const [url] = await getStorageBucket().file(audioPath).getSignedUrl({
     version: 'v4',
@@ -711,7 +717,23 @@ export async function acceptWhisper(req: Request, res: Response) {
 
     try {
       const smsDelivery = await sendWhisperSmsIfAllowed(doc.ref, whisper);
-      return res.json({ success: true, whisperId: doc.id, smsDelivery });
+      return res.json({
+        success: true,
+        whisperId: doc.id,
+        status: 'accepted',
+        wrapStyle: whisper.wrapStyle,
+        wrap_style: whisper.wrapStyle,
+        whisper: {
+          ...whisper,
+          status: 'accepted',
+          wrapStyle: whisper.wrapStyle,
+          wrap_style: whisper.wrapStyle,
+          generatedContent: whisper.generatedContent,
+          ...whisper.generatedContent,
+          audioUrl: await createAudioReadUrl(whisper.audioPath),
+        },
+        smsDelivery,
+      });
     } catch (error) {
       logSmsError('Whisper SMS failed after consent acceptance', error);
       if (error instanceof SmsValidationError) return res.status(400).json({ error: error.message });
@@ -775,7 +797,11 @@ export async function unwrapByToken(req: Request, res: Response) {
       recipientGender: whisper.recipientGender,
       senderName: whisper.senderName,
       deliveryFormat: whisper.deliveryFormat,
+      wrapStyle: whisper.wrapStyle,
+      wrap_style: whisper.wrapStyle,
+      status: nextStatus,
       generatedContent: whisper.generatedContent,
+      ...whisper.generatedContent,
       audioUrl: await createAudioReadUrl(whisper.audioPath),
       joinLink: process.env.WHISPERWRAP_JOIN_URL ?? null,
       smsDelivery,

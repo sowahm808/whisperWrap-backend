@@ -290,13 +290,8 @@ Requirements:
 - Never make prophetic, financial, medical, legal, or guaranteed outcome claims.
 - Include one appropriate Bible verse.
 - Scripture must use public-domain wording, preferably KJV, or a brief paraphrase.
-<<<<<<< HEAD
-- Include a short prayer that mentions ${recipientName} by name.
-- Keep the message under 30 words.
-=======
 - Include a short prayer that mentions ${recipientAddressName} by name or title.
 - Keep the message under 220 words.
->>>>>>> d2d0c65863e5d4565235eb2ab7582827e4820749
 - The title should feel personal and engaging.
 
 Return ONLY valid JSON with exactly these keys:
