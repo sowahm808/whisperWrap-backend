@@ -68,6 +68,10 @@ Copy `.env.example` to `.env` and fill in the required values.
 | `APP_BASE_URL` | Yes | Frontend base URL used to build `/unwrap/:token` consent links. |
 | `PASSWORD_RESET_CONTINUE_URL` | No | Optional Firebase password reset continue URL. |
 | `PUBLIC_WHISPER_GENERATION` | No | Set to `false` to require a Firebase ID token and active subscription for `POST /api/whispers/generate`. Public generation is enabled by default so the frontend AI preview button can work before auth is attached; unauthenticated previews are not persisted by the backend. |
+| `TWILIO_ACCOUNT_SID` | Yes for SMS | Twilio account SID used to create the API client. |
+| `TWILIO_AUTH_TOKEN` | Yes for SMS | Twilio auth token used to create the API client and validate webhooks. |
+| `TWILIO_MESSAGING_SERVICE_SID` | Recommended for SMS | Messaging Service SID (`MG...`) used as the sender. Takes precedence over `TWILIO_PHONE_NUMBER`. |
+| `TWILIO_PHONE_NUMBER` | Required without a Messaging Service | SMS-capable Twilio number in E.164 format used as the sender. |
 
 ## Local setup
 
