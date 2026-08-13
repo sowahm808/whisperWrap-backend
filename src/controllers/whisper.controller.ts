@@ -251,9 +251,17 @@ export async function sendWhisperSmsIfAllowed(
 }
 
 function logSmsError(context: string, error: unknown) {
+  const twilioError = error as {
+    code?: unknown;
+    status?: unknown;
+    moreInfo?: unknown;
+  };
   console.error(context, {
     message: error instanceof Error ? error.message : String(error),
     name: error instanceof Error ? error.name : undefined,
+    code: typeof twilioError?.code === 'number' ? twilioError.code : undefined,
+    status: typeof twilioError?.status === 'number' ? twilioError.status : undefined,
+    moreInfo: typeof twilioError?.moreInfo === 'string' ? twilioError.moreInfo : undefined,
   });
 }
 
@@ -638,7 +646,7 @@ export async function grantSmsConsent(req: Request, res: Response) {
       const status = err.code === 'invalid_or_expired_consent_link' ? 404 : err.code === 'sms_recipient_suppressed' ? 403 : 400;
       return res.status(status).json({ error: err.code });
     }
-    console.error({ event: 'sms.delivery.failed', message: err instanceof Error ? err.message : 'unknown' });
+    logSmsError('sms.delivery.failed', err);
     return res.status(502).json({ error: 'sms_delivery_failed' });
   }
 }

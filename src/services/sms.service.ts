@@ -18,7 +18,7 @@ export class SmsValidationError extends Error {
   }
 }
 
-function requiredEnv(name: 'TWILIO_ACCOUNT_SID' | 'TWILIO_AUTH_TOKEN' | 'TWILIO_PHONE_NUMBER'): string {
+function requiredEnv(name: 'TWILIO_ACCOUNT_SID' | 'TWILIO_AUTH_TOKEN'): string {
   const value = process.env[name]?.trim();
 
   if (!value) {
@@ -26,6 +26,24 @@ function requiredEnv(name: 'TWILIO_ACCOUNT_SID' | 'TWILIO_AUTH_TOKEN' | 'TWILIO_
   }
 
   return value;
+}
+
+export function twilioSender(): { messagingServiceSid: string } | { from: string } {
+  const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID?.trim();
+  if (messagingServiceSid) {
+    if (!/^MG[0-9a-f]{32}$/i.test(messagingServiceSid)) {
+      throw new Error('TWILIO_MESSAGING_SERVICE_SID must be a valid Twilio Messaging Service SID');
+    }
+    return { messagingServiceSid };
+  }
+
+  const from = process.env.TWILIO_PHONE_NUMBER?.trim();
+  if (!from) {
+    throw new Error(
+      'Missing Twilio sender: set TWILIO_MESSAGING_SERVICE_SID or TWILIO_PHONE_NUMBER',
+    );
+  }
+  return { from: normalizePhoneForSms(from) };
 }
 
 function ensureClient(): Twilio {
@@ -63,7 +81,7 @@ function trimSmsBody(body: string): string {
 
 async function sendSms(to: string, body: string): Promise<SmsDeliveryResult> {
   const message = await ensureClient().messages.create({
-    from: requiredEnv('TWILIO_PHONE_NUMBER'),
+    ...twilioSender(),
     to: normalizePhoneForSms(to),
     body: trimSmsBody(body),
   });
