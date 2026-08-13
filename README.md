@@ -288,3 +288,31 @@ Call this after the recipient starts or completes audio playback to move the sta
 9. The public page calls `GET /api/whispers/unwrap/:token`, displays the message, scripture, prayer, optional audio, and the “Join Resurgence Vibe” link.
 10. If audio is played, call `POST /api/whispers/unwrap/:token/listened`.
 11. Verify `whispers.status` and `recipientEvents` in Firestore.
+
+## Recipient-controlled SMS consent
+
+`POST /api/whispers/send-consent` now creates a single-purpose, hashed, 48-hour SMS consent token. It emails `/sms-consent/:token` when a recipient email exists; otherwise its authenticated response exposes the link for manual sharing. It never sends a pre-consent SMS.
+
+The public consent page uses:
+
+- `GET /api/public/whispers/:token/sms-consent` for minimal names, masked phone, and consent state.
+- `POST /api/public/whispers/:token/sms-consent` with an E.164 phone, literal `smsConsent: true`, and disclosure/terms/privacy versions.
+- `POST /api/webhooks/twilio/sms` for Twilio inbound STOP/START/HELP/INFO handling.
+
+Whisper state progresses through `generated`, `content_confirmed`, `consent_pending`, `sms_consented`, `delivered`, `opened`, and `listened`. Legacy records remain readable, but a missing `smsConsent` is always treated as not consented.
+
+Additional Firestore data:
+
+- `whispers.smsConsent`, `smsConsentTokenHash`, token timestamps, and `smsDeliveryState` hold the explicit consent/delivery gate. Raw consent tokens are not stored.
+- `smsConsentEvents` contains immutable grant/revoke audit events with only phone last-four.
+- `smsSuppressions/{phoneHmac}` enforces STOP without using a raw phone as the document key.
+
+Additional environment variables:
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `SMS_PHONE_HASH_PEPPER` | Yes for SMS | Secret HMAC pepper used for privacy-conscious suppression keys. |
+| `SMS_CONSENT_TOKEN_TTL_HOURS` | No | Consent-link lifetime; defaults to 48 hours. |
+| `TWILIO_INBOUND_WEBHOOK_URL` | Production webhook | Exact public webhook URL used during Twilio signature validation (important behind proxies). |
+| `SMS_SUPPORT_CONTACT` | No | Brand support contact returned for HELP/INFO. |
+| `NODE_ENV` | Production | Set to `production` to require valid Twilio webhook signatures. |

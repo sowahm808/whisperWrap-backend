@@ -12,7 +12,7 @@ export interface SmsDeliveryResult {
 }
 
 export class SmsValidationError extends Error {
-  constructor(message: string) {
+  constructor(message: string, public readonly code = 'invalid_phone_number') {
     super(message);
     this.name = 'SmsValidationError';
   }
@@ -72,23 +72,6 @@ async function sendSms(to: string, body: string): Promise<SmsDeliveryResult> {
     sid: message.sid,
     status: message.status,
   };
-}
-
-export async function sendConsentSms({
-  recipientPhone,
-  recipientName,
-  senderName,
-  unwrapLink,
-}: {
-  recipientPhone: string;
-  recipientName: string;
-  senderName: string;
-  unwrapLink: string;
-}): Promise<SmsDeliveryResult> {
-  return sendSms(
-    recipientPhone,
-    `Hi ${compact(recipientName) || 'there'}, ${compact(senderName) || 'A friend'} sent you a WhisperWrap. Would you like to unwrap it? ${unwrapLink}`,
-  );
 }
 
 export async function sendWhisperSms({

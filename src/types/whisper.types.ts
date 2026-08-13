@@ -26,11 +26,28 @@ export type RecipientGender = 'male' | 'female';
 export type WhisperStatus =
   | 'draft'
   | 'generated'
+  | 'content_confirmed'
+  | 'consent_pending'
+  | 'sms_consented'
+  | 'delivered'
+  // Legacy values remain readable during migration.
   | 'consent_sent'
   | 'accepted'
   | 'opened'
   | 'listened'
   | 'failed';
+
+export interface SmsConsentRecord {
+  status: 'pending' | 'granted' | 'revoked';
+  phoneNumber?: string | null;
+  consentedAt?: FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue | null;
+  revokedAt?: FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue | null;
+  method?: 'web-checkbox';
+  source?: 'recipient-sms-consent-page';
+  disclosureVersion?: string | null;
+  termsVersion?: string | null;
+  privacyVersion?: string | null;
+}
 
 export interface GeneratedWhisper {
   title: string;
@@ -56,6 +73,11 @@ export interface WhisperRecord {
   audioPath?: string | null;
   status: WhisperStatus;
   tokenHash?: string | null;
+  smsConsent?: SmsConsentRecord | null;
+  smsConsentTokenHash?: string | null;
+  smsConsentTokenCreatedAt?: FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue | null;
+  smsConsentTokenUsedAt?: FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue | null;
+  smsDeliveryState?: 'sending' | 'sent' | 'failed' | null;
   contentConfirmedAt?: FirebaseFirestore.FieldValue;
   consentSentAt?: FirebaseFirestore.FieldValue;
   acceptedAt?: FirebaseFirestore.FieldValue;
