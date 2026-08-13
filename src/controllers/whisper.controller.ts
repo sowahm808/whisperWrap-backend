@@ -1,15 +1,15 @@
 import { Request, Response } from 'express';
+import crypto from 'node:crypto';
 import { z } from 'zod';
 import { sendConsentEmail } from '../services/email.service.js';
 import {
   SmsValidationError,
   normalizePhoneForSms,
-  sendConsentSms,
   sendWhisperSms,
 } from '../services/sms.service.js';
 import { firebaseAdmin, getFirestore, getStorageBucket } from '../services/firebase.service.js';
 import { GeminiGenerationError, generateWhisperContent } from '../services/gemini.service.js';
-import { tokenService } from '../services/token.service.js';
+import { SMS_CONSENT_TOKEN_TTL_MS, tokenService } from '../services/token.service.js';
 import { RecipientGender, WhisperRecord, WhisperStatus } from '../types/whisper.types.js';
 
 const phoneSchema = z
@@ -82,6 +82,13 @@ const generatedContentSchema = z.object({
 const updateContentSchema = z.object({ generatedContent: generatedContentSchema });
 const whisperIdSchema = z.object({ whisperId: z.string().trim().min(5).max(128) });
 const tokenParamSchema = z.object({ token: z.string().trim().min(32).max(256) });
+const smsConsentSchema = z.object({
+  phoneNumber: z.string().trim().min(8).max(25),
+  smsConsent: z.literal(true, { errorMap: () => ({ message: 'sms_consent_required' }) }),
+  disclosureVersion: z.string().trim().min(1).max(40),
+  termsVersion: z.string().trim().min(1).max(40),
+  privacyVersion: z.string().trim().min(1).max(40),
+});
 
 const uploadSchema = z.object({
   whisperId: z.string().trim().min(5).max(128),
@@ -196,13 +203,33 @@ async function createAudioReadUrl(audioPath?: string | null): Promise<string | n
   return url;
 }
 
-async function sendWhisperSmsIfAllowed(
+function phoneHash(phone: string): string {
+  const pepper = process.env.SMS_PHONE_HASH_PEPPER;
+  if (!pepper) throw new Error('Missing SMS_PHONE_HASH_PEPPER');
+  return crypto.createHmac('sha256', pepper).update(phone).digest('hex');
+}
+
+export async function sendWhisperSmsIfAllowed(
   docRef: FirebaseFirestore.DocumentReference,
   whisper: WhisperRecord,
 ): Promise<null | Awaited<ReturnType<typeof sendWhisperSms>>> {
   if (whisper.deliveryFormat !== 'text' && whisper.deliveryFormat !== 'text_audio') return null;
-  if (!whisper.recipientPhone || whisper.smsSentAt) return null;
+  if (whisper.smsConsent?.status !== 'granted' || !whisper.smsConsent.consentedAt) {
+    console.warn({ event: 'sms.delivery.blocked', reason: 'missing_consent', whisperId: docRef.id });
+    throw new SmsValidationError('Recipient SMS consent is required before sending SMS', 'sms_consent_required');
+  }
+  if (whisper.smsSentAt || whisper.smsDeliveryState === 'sent') return null;
+  if (whisper.smsDeliveryState !== 'sending') {
+    throw new SmsValidationError('SMS delivery was not atomically authorized', 'sms_delivery_not_authorized');
+  }
+  if (!whisper.recipientPhone) throw new SmsValidationError('Recipient phone is required', 'recipient_phone_required');
+  const suppression = await getFirestore().collection('smsSuppressions').doc(phoneHash(whisper.recipientPhone)).get();
+  if (suppression.exists) {
+    console.warn({ event: 'sms.delivery.blocked', reason: 'suppressed', whisperId: docRef.id });
+    throw new SmsValidationError('SMS recipient is suppressed', 'sms_recipient_suppressed');
+  }
 
+  console.info({ event: 'sms.delivery.attempted', whisperId: docRef.id, phoneLast4: whisper.recipientPhone.slice(-4) });
   const smsResult = await sendWhisperSms({
     recipientPhone: whisper.recipientPhone,
     whisper: whisper.generatedContent,
@@ -212,8 +239,13 @@ async function sendWhisperSmsIfAllowed(
     smsSid: smsResult.sid,
     smsStatus: smsResult.status,
     smsSentAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
+    smsDeliveryState: 'sent',
+    status: 'delivered',
     updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
   });
+
+  await recordRecipientEvent(docRef.id, 'delivered', { smsStatus: smsResult.status });
+  console.info({ event: 'sms.delivery.succeeded', whisperId: docRef.id, phoneLast4: whisper.recipientPhone.slice(-4) });
 
   return smsResult;
 }
@@ -270,6 +302,7 @@ export async function generateWhisper(req: Request, res: Response) {
       audioPath: null,
       status: 'generated',
       tokenHash: null,
+      smsConsent: { status: 'pending', phoneNumber: normalizedRecipientPhone ?? null },
       createdAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
       updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
     };
@@ -389,6 +422,7 @@ export async function confirmWhisperContent(req: Request, res: Response) {
 
     await result.docRef.update({
       contentConfirmedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
+      status: 'content_confirmed',
       updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
     });
 
@@ -459,237 +493,156 @@ export async function createAudioUploadUrl(req: Request, res: Response) {
   }
 }
 
-// export async function sendConsent(req: Request, res: Response) {
-//   try {
-//     const { whisperId } = whisperIdSchema.parse(req.body);
-//     const result = await loadOwnedWhisper(whisperId, req.user?.uid);
-
-//     if (result.status !== 200) return res.status(result.status).json({ error: result.error });
-
-//     if (!result.whisper.generatedContent) {
-//       return res.status(409).json({
-//         error: 'Whisper must be generated before sending consent',
-//       });
-//     }
-
-//     const requiresAudio =
-//       result.whisper.deliveryFormat === 'audio' ||
-//       result.whisper.deliveryFormat === 'text_audio';
-
-//     if (requiresAudio && !result.whisper.audioPath) {
-//       return res.status(409).json({
-//         error: 'Audio delivery requires an uploaded audio file before consent can be sent',
-//       });
-//     }
-
-//     if (['accepted', 'opened', 'listened'].includes(result.whisper.status)) {
-//       return res.status(409).json({
-//         error: 'Recipient has already opened this whisper',
-//       });
-//     }
-
-//     if (!result.whisper.recipientEmail && !result.whisper.recipientPhone) {
-//       return res.status(400).json({
-//         error: 'Recipient email or phone is required to send consent',
-//       });
-//     }
-
-//     const token = tokenService.generateSecureToken();
-//     const tokenHash = tokenService.hashToken(token);
-//     const baseUrl = process.env.APP_BASE_URL?.replace(/\/$/, '');
-
-//     if (!baseUrl) throw new Error('Missing APP_BASE_URL');
-
-//     const unwrapLink = `${baseUrl}/unwrap/${token}`;
-//     const deliveryResults: Record<string, unknown> = {};
-
-//     if (result.whisper.recipientEmail) {
-//       deliveryResults.email = await sendConsentEmail({
-//         recipientEmail: result.whisper.recipientEmail,
-//         recipientName: result.whisper.recipientName,
-//         senderName: result.whisper.senderName,
-//         unwrapLink,
-//       });
-//     }
-
-//     if (result.whisper.recipientPhone) {
-//       deliveryResults.sms = await sendConsentSms({
-//         recipientPhone: result.whisper.recipientPhone,
-//         recipientName: result.whisper.recipientName,
-//         senderName: result.whisper.senderName,
-//         unwrapLink,
-//       });
-//     }
-
-//     const channels = {
-//       email: !!result.whisper.recipientEmail,
-//       sms: !!result.whisper.recipientPhone,
-//     };
-
-//     await result.docRef.update({
-//       tokenHash,
-//       status: 'consent_sent',
-//       consentSentAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
-//       consentChannels: channels,
-//       consentDelivery: deliveryResults,
-//       updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
-//     });
-
-//     await recordRecipientEvent(whisperId, 'consent_sent', { channels });
-
-//     return res.json({
-//       success: true,
-//       unwrapLink,
-//       channels,
-//     });
-//   // } catch (err) {
-//   //   if (err instanceof z.ZodError) return validationError(res, err);
-//   //   console.error('sendConsent failed', err);
-//   //   return res.status(500).json({ error: 'Failed to send consent' });
-//   // }
-
-//   } catch (err) {
-//   if (err instanceof z.ZodError) return validationError(res, err);
-
-//   console.error('sendConsent failed', err);
-
-//   return res.status(500).json({
-//     error: 'Failed to send consent',
-//     message: err instanceof Error ? err.message : String(err),
-//   });
-// }
-// }
 export async function sendConsent(req: Request, res: Response) {
   try {
     const { whisperId } = whisperIdSchema.parse(req.body);
     const result = await loadOwnedWhisper(whisperId, req.user?.uid);
-
-    if (result.status !== 200) {
-      return res.status(result.status).json({ error: result.error });
-    }
-
-    if (!result.whisper.generatedContent) {
-      return res.status(409).json({
-        error: 'Whisper must be generated before sending consent',
-      });
-    }
-
-    const requiresAudio =
-      result.whisper.deliveryFormat === 'audio' ||
-      result.whisper.deliveryFormat === 'text_audio';
-
-    if (requiresAudio && !result.whisper.audioPath) {
-      return res.status(409).json({
-        error: 'Audio delivery requires an uploaded audio file before consent can be sent',
-      });
-    }
-
-    if (['accepted', 'opened', 'listened'].includes(result.whisper.status)) {
-      return res.status(409).json({
-        error: 'Recipient has already opened this whisper',
-      });
-    }
-
-    if (!result.whisper.recipientEmail && !result.whisper.recipientPhone) {
-      return res.status(400).json({
-        error: 'Recipient email or phone is required to send consent',
-      });
-    }
+    if (result.status !== 200) return res.status(result.status).json({ error: result.error });
+    if (!result.whisper.generatedContent) return res.status(409).json({ error: 'Whisper must be generated before sending consent' });
+    const requiresAudio = ['audio', 'text_audio'].includes(result.whisper.deliveryFormat);
+    if (requiresAudio && !result.whisper.audioPath) return res.status(409).json({ error: 'Audio delivery requires an uploaded audio file before consent can be sent' });
+    if (['opened', 'listened'].includes(result.whisper.status)) return res.status(409).json({ error: 'Recipient has already opened this whisper' });
 
     const token = tokenService.generateSecureToken();
-    const tokenHash = tokenService.hashToken(token);
     const baseUrl = process.env.APP_BASE_URL?.replace(/\/$/, '');
-
     if (!baseUrl) throw new Error('Missing APP_BASE_URL');
-
-    const unwrapLink = `${baseUrl}/unwrap/${token}`;
-
-    const deliveryResults: Record<string, unknown> = {};
-    const deliveryErrors: Record<string, string> = {};
-
-    if (result.whisper.recipientEmail) {
-      try {
-        deliveryResults.email = await sendConsentEmail({
-          recipientEmail: result.whisper.recipientEmail,
-          recipientName: result.whisper.recipientAddressName,
-          senderName: result.whisper.senderName,
-          unwrapLink,
-        });
-      } catch (error) {
-        console.error('Consent email failed', error);
-        deliveryErrors.email =
-          error instanceof Error ? error.message : 'Email delivery failed';
-      }
-    }
-
-    if (result.whisper.recipientPhone) {
-      try {
-        deliveryResults.sms = await sendConsentSms({
-          recipientPhone: result.whisper.recipientPhone,
-          recipientName: result.whisper.recipientAddressName,
-          senderName: result.whisper.senderName,
-          unwrapLink,
-        });
-      } catch (error) {
-        logSmsError('Consent SMS failed', error);
-        if (error instanceof SmsValidationError) return res.status(400).json({ error: error.message });
-
-        return res.status(502).json({
-          error: 'Failed to send consent SMS',
-          message: error instanceof Error ? error.message : 'SMS delivery failed',
-        });
-      }
-    }
-
-    const emailSent = !!deliveryResults.email;
-    const smsSent = !!deliveryResults.sms;
-
-    if (!emailSent && !smsSent) {
-      return res.status(502).json({
-        error: 'Failed to send consent',
-        message: 'Consent could not be delivered by email or SMS.',
-        deliveryErrors,
-      });
-    }
-
-    const channels = {
-      email: emailSent,
-      sms: smsSent,
-    };
+    const consentLink = `${baseUrl}/sms-consent/${token}`;
+    const channels = { email: !!result.whisper.recipientEmail, manual: !result.whisper.recipientEmail };
 
     await result.docRef.update({
-      tokenHash,
-      status: 'consent_sent',
+      smsConsentTokenHash: tokenService.hashToken(token),
+      smsConsentTokenCreatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
+      smsConsentTokenUsedAt: null,
+      smsConsent: { status: 'pending', phoneNumber: result.whisper.recipientPhone ?? null },
+      status: 'consent_pending',
       consentSentAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
-      consentChannels: channels,
-      consentDelivery: deliveryResults,
-      consentDeliveryErrors: deliveryErrors,
       updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
     });
-
-    await recordRecipientEvent(whisperId, 'consent_sent', {
-      channels,
-      deliveryErrors,
-    });
-
-    return res.json({
-      success: true,
-      unwrapLink,
-      channels,
-      deliveryErrors,
-    });
+    if (result.whisper.recipientEmail) {
+      await sendConsentEmail({
+        recipientEmail: result.whisper.recipientEmail,
+        recipientName: result.whisper.recipientAddressName,
+        senderName: result.whisper.senderName,
+        unwrapLink: consentLink,
+      });
+    }
+    console.info({ event: 'sms.consent.link_generated', whisperId, channel: channels.email ? 'email' : 'manual' });
+    await recordRecipientEvent(whisperId, 'consent_pending', { channels });
+    return res.json({ success: true, consentLink, channels });
   } catch (err) {
     if (err instanceof z.ZodError) return validationError(res, err);
-    if (err instanceof SmsValidationError) return res.status(400).json({ error: err.message });
-
-    console.error('sendConsent failed', err);
-
-    return res.status(500).json({
-      error: 'Failed to send consent',
-      message: err instanceof Error ? err.message : String(err),
-    });
+    console.error('sendConsent failed', { message: err instanceof Error ? err.message : String(err) });
+    return res.status(500).json({ error: 'Failed to send consent' });
   }
 }
+
+function consentTokenExpired(whisper: WhisperRecord): boolean {
+  const created = whisper.smsConsentTokenCreatedAt;
+  if (!created || typeof (created as FirebaseFirestore.Timestamp).toMillis !== 'function') return true;
+  return Date.now() - (created as FirebaseFirestore.Timestamp).toMillis() > SMS_CONSENT_TOKEN_TTL_MS;
+}
+
+async function findConsentToken(token: string) {
+  const query = await getFirestore().collection('whispers')
+    .where('smsConsentTokenHash', '==', tokenService.hashToken(token)).limit(2).get();
+  if (query.size !== 1) return null;
+  const doc = query.docs[0];
+  const whisper = withWhisperFallbacks(doc.data() as WhisperRecord);
+  return consentTokenExpired(whisper) ? null : { doc, whisper };
+}
+
+export async function getSmsConsent(req: Request, res: Response) {
+  try {
+    const { token } = tokenParamSchema.parse(req.params);
+    const found = await findConsentToken(token);
+    if (!found) return res.status(404).json({ error: 'invalid_or_expired_consent_link' });
+    const phone = found.whisper.recipientPhone;
+    return res.json({
+      valid: true,
+      recipientName: found.whisper.recipientAddressName,
+      senderName: found.whisper.senderName,
+      maskedPhone: phone ? `***-***-${phone.slice(-4)}` : null,
+      alreadyConsented: found.whisper.smsConsent?.status === 'granted',
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(404).json({ error: 'invalid_or_expired_consent_link' });
+    console.error('getSmsConsent failed');
+    return res.status(500).json({ error: 'consent_lookup_failed' });
+  }
+}
+
+export async function grantSmsConsent(req: Request, res: Response) {
+  try {
+    const { token } = tokenParamSchema.parse(req.params);
+    const input = smsConsentSchema.parse(req.body);
+    const normalizedPhone = normalizePhoneForSms(input.phoneNumber);
+    const found = await findConsentToken(token);
+    if (!found) return res.status(404).json({ error: 'invalid_or_expired_consent_link' });
+    const db = getFirestore();
+    let alreadyProcessed = false;
+
+    await db.runTransaction(async transaction => {
+      const snapshot = await transaction.get(found.doc.ref);
+      const whisper = snapshot.data() as WhisperRecord | undefined;
+      if (!whisper || whisper.smsConsentTokenHash !== tokenService.hashToken(token) || consentTokenExpired(whisper)) {
+        throw new SmsValidationError('Invalid consent link', 'invalid_or_expired_consent_link');
+      }
+      if (whisper.recipientPhone && normalizePhoneForSms(whisper.recipientPhone) !== normalizedPhone) {
+        throw new SmsValidationError('Recipient phone mismatch', 'recipient_phone_mismatch');
+      }
+      if (whisper.smsSentAt || whisper.smsDeliveryState === 'sent' || whisper.smsDeliveryState === 'sending') {
+        alreadyProcessed = true;
+        return;
+      }
+      const now = firebaseAdmin.firestore.FieldValue.serverTimestamp();
+      transaction.update(found.doc.ref, {
+        recipientPhone: normalizedPhone,
+        smsConsent: {
+          status: 'granted', phoneNumber: normalizedPhone, consentedAt: now,
+          method: 'web-checkbox', source: 'recipient-sms-consent-page',
+          disclosureVersion: input.disclosureVersion, termsVersion: input.termsVersion,
+          privacyVersion: input.privacyVersion,
+        },
+        smsConsentTokenUsedAt: now,
+        smsDeliveryState: ['text', 'text_audio'].includes(whisper.deliveryFormat) ? 'sending' : null,
+        status: 'sms_consented',
+        updatedAt: now,
+      });
+      transaction.create(db.collection('smsConsentEvents').doc(), {
+        whisperId: found.doc.id, event: 'sms_consent_granted', phoneLast4: normalizedPhone.slice(-4),
+        method: 'web-checkbox', disclosureVersion: input.disclosureVersion,
+        termsVersion: input.termsVersion, privacyVersion: input.privacyVersion, createdAt: now,
+      });
+    });
+    if (alreadyProcessed) return res.json({ success: true, alreadyProcessed: true });
+
+    const persisted = await found.doc.ref.get();
+    const whisper = persisted.data() as WhisperRecord | undefined;
+    if (!whisper) throw new Error('Persisted whisper not found');
+    console.info({ event: 'sms.consent.granted', whisperId: found.doc.id, phoneLast4: normalizedPhone.slice(-4) });
+    if (whisper.deliveryFormat === 'audio') return res.json({ success: true, alreadyProcessed: false });
+    try {
+      await sendWhisperSmsIfAllowed(found.doc.ref, withWhisperFallbacks(whisper));
+    } catch (error) {
+      await found.doc.ref.update({ smsDeliveryState: 'failed', updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp() });
+      throw error;
+    }
+    return res.json({ success: true, alreadyProcessed: false });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const missingConsent = err.issues.some(issue => issue.path[0] === 'smsConsent');
+      return res.status(400).json({ error: missingConsent ? 'sms_consent_required' : 'invalid_request' });
+    }
+    if (err instanceof SmsValidationError) {
+      console.warn({ event: 'sms.consent.rejected', reason: err.code });
+      const status = err.code === 'invalid_or_expired_consent_link' ? 404 : err.code === 'sms_recipient_suppressed' ? 403 : 400;
+      return res.status(status).json({ error: err.code });
+    }
+    console.error({ event: 'sms.delivery.failed', message: err instanceof Error ? err.message : 'unknown' });
+    return res.status(502).json({ error: 'sms_delivery_failed' });
+  }
+}
+
 export async function acceptWhisper(req: Request, res: Response) {
   try {
     const { token } = tokenParamSchema.parse(req.params);
@@ -715,33 +668,17 @@ export async function acceptWhisper(req: Request, res: Response) {
       await recordRecipientEvent(doc.id, 'accepted');
     }
 
-    try {
-      const smsDelivery = await sendWhisperSmsIfAllowed(doc.ref, whisper);
-      return res.json({
-        success: true,
-        whisperId: doc.id,
-        status: 'accepted',
-        wrapStyle: whisper.wrapStyle,
-        wrap_style: whisper.wrapStyle,
-        whisper: {
-          ...whisper,
-          status: 'accepted',
-          wrapStyle: whisper.wrapStyle,
-          wrap_style: whisper.wrapStyle,
-          generatedContent: whisper.generatedContent,
-          ...whisper.generatedContent,
-          audioUrl: await createAudioReadUrl(whisper.audioPath),
-        },
-        smsDelivery,
-      });
-    } catch (error) {
-      logSmsError('Whisper SMS failed after consent acceptance', error);
-      if (error instanceof SmsValidationError) return res.status(400).json({ error: error.message });
-      return res.status(502).json({
-        error: 'Failed to send Whisper SMS',
-        message: error instanceof Error ? error.message : 'SMS delivery failed',
-      });
-    }
+    return res.json({
+      success: true,
+      whisperId: doc.id,
+      status: 'accepted',
+      wrapStyle: whisper.wrapStyle,
+      wrap_style: whisper.wrapStyle,
+      whisper: {
+        ...whisper, status: 'accepted', wrap_style: whisper.wrapStyle,
+        audioUrl: await createAudioReadUrl(whisper.audioPath),
+      },
+    });
   } catch (err) {
     if (err instanceof z.ZodError) return validationError(res, err);
     console.error('acceptWhisper failed', err);
@@ -776,20 +713,6 @@ export async function unwrapByToken(req: Request, res: Response) {
     if (firstOpen) await recordRecipientEvent(doc.id, 'accepted');
     await recordRecipientEvent(doc.id, 'opened');
 
-    let smsDelivery: Awaited<ReturnType<typeof sendWhisperSms>> | null = null;
-    if (firstOpen) {
-      try {
-        smsDelivery = await sendWhisperSmsIfAllowed(doc.ref, whisper);
-      } catch (error) {
-        logSmsError('Whisper SMS failed during unwrap', error);
-        if (error instanceof SmsValidationError) return res.status(400).json({ error: error.message });
-        return res.status(502).json({
-          error: 'Failed to send Whisper SMS',
-          message: error instanceof Error ? error.message : 'SMS delivery failed',
-        });
-      }
-    }
-
     return res.json({
       whisperId: doc.id,
       recipientName: whisper.recipientName,
@@ -804,7 +727,6 @@ export async function unwrapByToken(req: Request, res: Response) {
       ...whisper.generatedContent,
       audioUrl: await createAudioReadUrl(whisper.audioPath),
       joinLink: process.env.WHISPERWRAP_JOIN_URL ?? null,
-      smsDelivery,
     });
   } catch (err) {
     if (err instanceof z.ZodError) return validationError(res, err);

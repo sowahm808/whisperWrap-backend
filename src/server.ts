@@ -2,6 +2,8 @@ import dotenv from 'dotenv';
 import express from 'express';
 import authRoutes from './routes/auth.routes.js';
 import whisperRoutes from './routes/whisper.routes.js';
+import publicWhisperRoutes from './routes/public-whisper.routes.js';
+import webhookRoutes from './routes/webhook.routes.js';
 
 dotenv.config();
 
@@ -30,11 +32,13 @@ app.use((req, res, next) => {
   return next();
 });
 
+app.use('/api/webhooks', webhookRoutes);
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/auth', authRoutes);
 app.use('/api/whispers', whisperRoutes);
+app.use('/api/public/whispers', publicWhisperRoutes);
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err);
