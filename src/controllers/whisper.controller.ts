@@ -561,19 +561,31 @@ export async function sendConsent(req: Request, res: Response) {
   }
 }
 
-function consentTokenExpired(whisper: WhisperRecord): boolean {
+export function consentTokenExpired(whisper: WhisperRecord, now = Date.now()): boolean {
   const created = whisper.smsConsentTokenCreatedAt;
   if (!created || typeof (created as FirebaseFirestore.Timestamp).toMillis !== 'function') return true;
-  return Date.now() - (created as FirebaseFirestore.Timestamp).toMillis() > SMS_CONSENT_TOKEN_TTL_MS;
+  const createdAtMs = (created as FirebaseFirestore.Timestamp).toMillis();
+  return !Number.isFinite(createdAtMs) || createdAtMs > now || now - createdAtMs > SMS_CONSENT_TOKEN_TTL_MS;
 }
 
-async function findConsentToken(token: string) {
-  const query = await getFirestore().collection('whispers')
-    .where('smsConsentTokenHash', '==', tokenService.hashToken(token)).limit(2).get();
-  if (query.size !== 1) return null;
+export async function findConsentToken(
+  token: string,
+  db: FirebaseFirestore.Firestore = getFirestore(),
+) {
+  const tokenHash = tokenService.hashToken(token);
+  const query = await db.collection('whispers')
+    .where('smsConsentTokenHash', '==', tokenHash).limit(2).get();
+  if (query.size !== 1) {
+    console.warn({ event: 'sms.consent.lookup_failed', tokenHashPrefix: tokenHash.slice(0, 8) });
+    return null;
+  }
   const doc = query.docs[0];
   const whisper = withWhisperFallbacks(doc.data() as WhisperRecord);
-  return consentTokenExpired(whisper) && !whisper.smsConsentTokenUsedAt ? null : { doc, whisper };
+  if (consentTokenExpired(whisper) && !whisper.smsConsentTokenUsedAt) {
+    console.warn({ event: 'sms.consent.lookup_failed', tokenHashPrefix: tokenHash.slice(0, 8) });
+    return null;
+  }
+  return { doc, whisper };
 }
 
 export async function getSmsConsent(req: Request, res: Response) {

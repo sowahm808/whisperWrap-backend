@@ -295,12 +295,12 @@ Call this after the recipient starts or completes audio playback to move the sta
 
 ## Recipient-controlled SMS consent
 
-`POST /api/whispers/send-consent` now creates a single-purpose, hashed, 48-hour SMS consent token. It emails `/sms-consent/:token` when a recipient email exists; otherwise its authenticated response exposes the link for manual sharing. It never sends a pre-consent SMS.
+`POST /api/whispers/send-consent` now creates a single-purpose, hashed, 168-hour SMS consent token. It emails `/sms-consent/:token` when a recipient email exists; otherwise its authenticated response exposes the link for manual sharing. It never sends a pre-consent SMS.
 
 The public consent page uses:
 
-- `GET /api/public/whispers/:token/sms-consent` for minimal names, masked phone, and consent state.
-- `POST /api/public/whispers/:token/sms-consent` with an E.164 phone and boolean `smsConsent`. `false` records a decline and continues through the non-SMS unwrap flow.
+- `GET /api/whispers/sms-consent/:token` for minimal names, masked phone, and consent state.
+- `POST /api/whispers/sms-consent/:token` with an E.164 phone and boolean `smsConsent`. `false` records a decline and continues through the non-SMS unwrap flow.
 - `POST /api/twilio/inbound` for signature-validated Twilio inbound STOP/START/HELP/INFO handling (the legacy `/api/webhooks/twilio/sms` route remains available).
 
 Disclosure text and disclosure/privacy/terms versions are returned by GET and controlled by the server; client-supplied version fields are ignored as audit evidence. The checkbox must default to unchecked in the frontend. A successful decision consumes the consent token and creates a separate random unwrap token. Replayed POSTs are successful no-ops and cannot send another SMS.
@@ -318,7 +318,7 @@ Additional environment variables:
 | Variable | Required | Description |
 | --- | --- | --- |
 | `SMS_PHONE_HASH_PEPPER` | Yes for SMS | Secret HMAC pepper used for privacy-conscious suppression keys. |
-| `SMS_CONSENT_TOKEN_TTL_HOURS` | No | Consent-link lifetime; defaults to 48 hours. |
+| `SMS_CONSENT_TOKEN_TTL_HOURS` | No | Consent-link lifetime; defaults to 168 hours (7 days). |
 | `TWILIO_INBOUND_WEBHOOK_URL` | Production webhook | Exact public webhook URL used during Twilio signature validation (important behind proxies). |
 | `SMS_SUPPORT_CONTACT` | No | Brand support contact returned for HELP/INFO. |
 Twilio must be configured to send inbound messages to the exact HTTPS URL `POST /api/twilio/inbound`. Signature validation is mandatory in every environment; set `TWILIO_INBOUND_WEBHOOK_URL` to that exact externally visible URL when the service is behind a proxy.
