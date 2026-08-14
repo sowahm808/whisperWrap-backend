@@ -33,6 +33,9 @@ app.use((req, res, next) => {
 });
 
 app.use('/api/webhooks', webhookRoutes);
+// Twilio's configured A2P inbound endpoint. The legacy webhook mount remains for
+// compatibility; both routes use the same signature-validated handler.
+app.use('/api', webhookRoutes);
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));

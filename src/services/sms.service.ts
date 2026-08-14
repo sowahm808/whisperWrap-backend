@@ -1,4 +1,5 @@
 import twilio from 'twilio';
+import crypto from 'node:crypto';
 import type { Twilio } from 'twilio';
 import type { GeneratedWhisper } from '../types/whisper.types.js';
 
@@ -70,6 +71,12 @@ export function normalizePhoneForSms(phone: string): string {
   );
 }
 
+export function phoneHash(phone: string): string {
+  const pepper = process.env.SMS_PHONE_HASH_PEPPER;
+  if (!pepper) throw new Error('Missing SMS_PHONE_HASH_PEPPER');
+  return crypto.createHmac('sha256', pepper).update(normalizePhoneForSms(phone)).digest('hex');
+}
+
 function compact(value?: string | null): string {
   return (value ?? '').replace(/\s+/g, ' ').trim();
 }
@@ -95,11 +102,14 @@ async function sendSms(to: string, body: string): Promise<SmsDeliveryResult> {
 export async function sendWhisperSms({
   recipientPhone,
   whisper,
+  unwrapUrl,
 }: {
   recipientPhone: string;
   whisper: GeneratedWhisper;
+  unwrapUrl: string;
 }): Promise<SmsDeliveryResult> {
   const body = [
+    `Open your private Whisper: ${unwrapUrl}`,
     compact(whisper.message),
     whisper.scriptureReference || whisper.scriptureText
       ? `Scripture: ${compact(whisper.scriptureReference)}${whisper.scriptureReference && whisper.scriptureText ? ' — ' : ''}${compact(whisper.scriptureText)}`

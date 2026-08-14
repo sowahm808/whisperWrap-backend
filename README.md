@@ -300,16 +300,18 @@ Call this after the recipient starts or completes audio playback to move the sta
 The public consent page uses:
 
 - `GET /api/public/whispers/:token/sms-consent` for minimal names, masked phone, and consent state.
-- `POST /api/public/whispers/:token/sms-consent` with an E.164 phone, literal `smsConsent: true`, and disclosure/terms/privacy versions.
-- `POST /api/webhooks/twilio/sms` for Twilio inbound STOP/START/HELP/INFO handling.
+- `POST /api/public/whispers/:token/sms-consent` with an E.164 phone and boolean `smsConsent`. `false` records a decline and continues through the non-SMS unwrap flow.
+- `POST /api/twilio/inbound` for signature-validated Twilio inbound STOP/START/HELP/INFO handling (the legacy `/api/webhooks/twilio/sms` route remains available).
+
+Disclosure text and disclosure/privacy/terms versions are returned by GET and controlled by the server; client-supplied version fields are ignored as audit evidence. The checkbox must default to unchecked in the frontend. A successful decision consumes the consent token and creates a separate random unwrap token. Replayed POSTs are successful no-ops and cannot send another SMS.
 
 Whisper state progresses through `generated`, `content_confirmed`, `consent_pending`, `sms_consented`, `delivered`, `opened`, and `listened`. Legacy records remain readable, but a missing `smsConsent` is always treated as not consented.
 
 Additional Firestore data:
 
 - `whispers.smsConsent`, `smsConsentTokenHash`, token timestamps, and `smsDeliveryState` hold the explicit consent/delivery gate. Raw consent tokens are not stored.
-- `smsConsentEvents` contains immutable grant/revoke audit events with only phone last-four.
-- `smsSuppressions/{phoneHmac}` enforces STOP without using a raw phone as the document key.
+- `smsConsentEvents` contains immutable grant/decline/revoke audit events with a peppered phone hash, phone last-four, consent status, method, source, and server-controlled disclosure evidence.
+- `smsSuppressions/{phoneHmac}` enforces STOP without using a raw phone as the document key and stores the hash, last-four, opt-out reason/source, and timestamps.
 
 Additional environment variables:
 
@@ -319,4 +321,4 @@ Additional environment variables:
 | `SMS_CONSENT_TOKEN_TTL_HOURS` | No | Consent-link lifetime; defaults to 48 hours. |
 | `TWILIO_INBOUND_WEBHOOK_URL` | Production webhook | Exact public webhook URL used during Twilio signature validation (important behind proxies). |
 | `SMS_SUPPORT_CONTACT` | No | Brand support contact returned for HELP/INFO. |
-| `NODE_ENV` | Production | Set to `production` to require valid Twilio webhook signatures. |
+Twilio must be configured to send inbound messages to the exact HTTPS URL `POST /api/twilio/inbound`. Signature validation is mandatory in every environment; set `TWILIO_INBOUND_WEBHOOK_URL` to that exact externally visible URL when the service is behind a proxy.

@@ -1,10 +1,17 @@
 import { Request, Response } from 'express';
-import crypto from 'node:crypto';
 import { z } from 'zod';
+import {
+  PRIVACY_POLICY_VERSION,
+  SMS_CONSENT_SOURCE,
+  SMS_DISCLOSURE_TEXT,
+  SMS_DISCLOSURE_VERSION,
+  TERMS_VERSION,
+} from '../config/sms-compliance.js';
 import { sendConsentEmail } from '../services/email.service.js';
 import {
   SmsValidationError,
   normalizePhoneForSms,
+  phoneHash,
   sendWhisperSms,
 } from '../services/sms.service.js';
 import { firebaseAdmin, getFirestore, getStorageBucket } from '../services/firebase.service.js';
@@ -84,10 +91,11 @@ const whisperIdSchema = z.object({ whisperId: z.string().trim().min(5).max(128) 
 const tokenParamSchema = z.object({ token: z.string().trim().min(32).max(256) });
 const smsConsentSchema = z.object({
   phoneNumber: z.string().trim().min(8).max(25),
-  smsConsent: z.literal(true, { errorMap: () => ({ message: 'sms_consent_required' }) }),
-  disclosureVersion: z.string().trim().min(1).max(40),
-  termsVersion: z.string().trim().min(1).max(40),
-  privacyVersion: z.string().trim().min(1).max(40),
+  smsConsent: z.boolean(),
+  // Accepted for backwards-compatible clients, but never treated as evidence.
+  disclosureVersion: z.string().trim().max(40).optional(),
+  termsVersion: z.string().trim().max(40).optional(),
+  privacyVersion: z.string().trim().max(40).optional(),
 });
 
 const uploadSchema = z.object({
@@ -203,15 +211,10 @@ async function createAudioReadUrl(audioPath?: string | null): Promise<string | n
   return url;
 }
 
-function phoneHash(phone: string): string {
-  const pepper = process.env.SMS_PHONE_HASH_PEPPER;
-  if (!pepper) throw new Error('Missing SMS_PHONE_HASH_PEPPER');
-  return crypto.createHmac('sha256', pepper).update(phone).digest('hex');
-}
-
 export async function sendWhisperSmsIfAllowed(
   docRef: FirebaseFirestore.DocumentReference,
   whisper: WhisperRecord,
+  secureWhisperToken?: string,
 ): Promise<null | Awaited<ReturnType<typeof sendWhisperSms>>> {
   if (whisper.deliveryFormat !== 'text' && whisper.deliveryFormat !== 'text_audio') return null;
   if (whisper.smsConsent?.status !== 'granted' || !whisper.smsConsent.consentedAt) {
@@ -223,16 +226,27 @@ export async function sendWhisperSmsIfAllowed(
     throw new SmsValidationError('SMS delivery was not atomically authorized', 'sms_delivery_not_authorized');
   }
   if (!whisper.recipientPhone) throw new SmsValidationError('Recipient phone is required', 'recipient_phone_required');
-  const suppression = await getFirestore().collection('smsSuppressions').doc(phoneHash(whisper.recipientPhone)).get();
+  const normalizedRecipientPhone = normalizePhoneForSms(whisper.recipientPhone);
+  if (!whisper.smsConsent.phoneNumber || normalizePhoneForSms(whisper.smsConsent.phoneNumber) !== normalizedRecipientPhone) {
+    throw new SmsValidationError('Consent destination does not match recipient phone', 'recipient_phone_mismatch');
+  }
+  if (!whisper.tokenHash) throw new SmsValidationError('Whisper access token is required', 'unwrap_token_required');
+  const suppression = await getFirestore().collection('smsSuppressions').doc(phoneHash(normalizedRecipientPhone)).get();
   if (suppression.exists) {
     console.warn({ event: 'sms.delivery.blocked', reason: 'suppressed', whisperId: docRef.id });
     throw new SmsValidationError('SMS recipient is suppressed', 'sms_recipient_suppressed');
   }
 
   console.info({ event: 'sms.delivery.attempted', whisperId: docRef.id, phoneLast4: whisper.recipientPhone.slice(-4) });
+  if (!secureWhisperToken || tokenService.hashToken(secureWhisperToken) !== whisper.tokenHash) {
+    throw new SmsValidationError('Whisper access token is unavailable', 'unwrap_token_unavailable');
+  }
+  const baseUrl = process.env.APP_BASE_URL?.replace(/\/$/, '');
+  if (!baseUrl) throw new Error('Missing APP_BASE_URL');
   const smsResult = await sendWhisperSms({
-    recipientPhone: whisper.recipientPhone,
+    recipientPhone: normalizedRecipientPhone,
     whisper: whisper.generatedContent,
+    unwrapUrl: `${baseUrl}/unwrap/${secureWhisperToken}`,
   });
 
   await docRef.update({
@@ -311,6 +325,7 @@ export async function generateWhisper(req: Request, res: Response) {
       status: 'generated',
       tokenHash: null,
       smsConsent: { status: 'pending', phoneNumber: normalizedRecipientPhone ?? null },
+      smsDeliveryState: 'not_authorized',
       createdAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
       updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp(),
     };
@@ -515,6 +530,8 @@ export async function sendConsent(req: Request, res: Response) {
     const baseUrl = process.env.APP_BASE_URL?.replace(/\/$/, '');
     if (!baseUrl) throw new Error('Missing APP_BASE_URL');
     const consentLink = `${baseUrl}/sms-consent/${token}`;
+    // "manual" means the authenticated sender copies this URL into a non-SMS
+    // channel. This function must never deliver a consent invitation via Twilio.
     const channels = { email: !!result.whisper.recipientEmail, manual: !result.whisper.recipientEmail };
 
     await result.docRef.update({
@@ -556,7 +573,7 @@ async function findConsentToken(token: string) {
   if (query.size !== 1) return null;
   const doc = query.docs[0];
   const whisper = withWhisperFallbacks(doc.data() as WhisperRecord);
-  return consentTokenExpired(whisper) ? null : { doc, whisper };
+  return consentTokenExpired(whisper) && !whisper.smsConsentTokenUsedAt ? null : { doc, whisper };
 }
 
 export async function getSmsConsent(req: Request, res: Response) {
@@ -571,6 +588,14 @@ export async function getSmsConsent(req: Request, res: Response) {
       senderName: found.whisper.senderName,
       maskedPhone: phone ? `***-***-${phone.slice(-4)}` : null,
       alreadyConsented: found.whisper.smsConsent?.status === 'granted',
+      processed: !!found.whisper.smsConsentTokenUsedAt,
+      consentStatus: found.whisper.smsConsent?.status ?? 'pending',
+      disclosure: {
+        version: SMS_DISCLOSURE_VERSION,
+        text: SMS_DISCLOSURE_TEXT,
+        privacyVersion: PRIVACY_POLICY_VERSION,
+        termsVersion: TERMS_VERSION,
+      },
     });
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(404).json({ error: 'invalid_or_expired_consent_link' });
@@ -588,38 +613,49 @@ export async function grantSmsConsent(req: Request, res: Response) {
     if (!found) return res.status(404).json({ error: 'invalid_or_expired_consent_link' });
     const db = getFirestore();
     let alreadyProcessed = false;
+    const secureWhisperToken = tokenService.generateSecureToken();
+    const grantsConsent = input.smsConsent === true;
 
     await db.runTransaction(async transaction => {
       const snapshot = await transaction.get(found.doc.ref);
       const whisper = snapshot.data() as WhisperRecord | undefined;
-      if (!whisper || whisper.smsConsentTokenHash !== tokenService.hashToken(token) || consentTokenExpired(whisper)) {
+      if (!whisper || whisper.smsConsentTokenHash !== tokenService.hashToken(token) ||
+          (consentTokenExpired(whisper) && !whisper.smsConsentTokenUsedAt)) {
         throw new SmsValidationError('Invalid consent link', 'invalid_or_expired_consent_link');
       }
       if (whisper.recipientPhone && normalizePhoneForSms(whisper.recipientPhone) !== normalizedPhone) {
         throw new SmsValidationError('Recipient phone mismatch', 'recipient_phone_mismatch');
       }
-      if (whisper.smsSentAt || whisper.smsDeliveryState === 'sent' || whisper.smsDeliveryState === 'sending') {
+      // A consent token is single-use. Replays are successful no-ops, including after
+      // a provider failure, because retrying an ambiguous send could duplicate an SMS.
+      if (whisper.smsConsentTokenUsedAt || whisper.smsSentAt || whisper.smsDeliveryState === 'sent' || whisper.smsDeliveryState === 'sending') {
         alreadyProcessed = true;
         return;
       }
       const now = firebaseAdmin.firestore.FieldValue.serverTimestamp();
+      const status = grantsConsent ? 'granted' : 'declined';
       transaction.update(found.doc.ref, {
         recipientPhone: normalizedPhone,
         smsConsent: {
-          status: 'granted', phoneNumber: normalizedPhone, consentedAt: now,
-          method: 'web-checkbox', source: 'recipient-sms-consent-page',
-          disclosureVersion: input.disclosureVersion, termsVersion: input.termsVersion,
-          privacyVersion: input.privacyVersion,
+          status, phoneNumber: normalizedPhone, consentedAt: grantsConsent ? now : null,
+          method: 'web-checkbox', source: SMS_CONSENT_SOURCE,
+          disclosureVersion: SMS_DISCLOSURE_VERSION, disclosureText: SMS_DISCLOSURE_TEXT,
+          termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_POLICY_VERSION,
         },
+        tokenHash: tokenService.hashToken(secureWhisperToken),
         smsConsentTokenUsedAt: now,
-        smsDeliveryState: ['text', 'text_audio'].includes(whisper.deliveryFormat) ? 'sending' : null,
-        status: 'sms_consented',
+        smsDeliveryState: grantsConsent && ['text', 'text_audio'].includes(whisper.deliveryFormat) ? 'sending' : 'not_authorized',
+        status: grantsConsent ? 'sms_consented' : 'consent_pending',
         updatedAt: now,
       });
       transaction.create(db.collection('smsConsentEvents').doc(), {
-        whisperId: found.doc.id, event: 'sms_consent_granted', phoneLast4: normalizedPhone.slice(-4),
-        method: 'web-checkbox', disclosureVersion: input.disclosureVersion,
-        termsVersion: input.termsVersion, privacyVersion: input.privacyVersion, createdAt: now,
+        whisperId: found.doc.id,
+        event: grantsConsent ? 'sms_consent_granted' : 'sms_consent_declined',
+        phoneHash: phoneHash(normalizedPhone), phoneLast4: normalizedPhone.slice(-4),
+        consentStatus: status, method: 'web-checkbox',
+        disclosureVersion: SMS_DISCLOSURE_VERSION, disclosureText: SMS_DISCLOSURE_TEXT,
+        termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_POLICY_VERSION,
+        source: SMS_CONSENT_SOURCE, createdAt: now,
       });
     });
     if (alreadyProcessed) return res.json({ success: true, alreadyProcessed: true });
@@ -627,19 +663,23 @@ export async function grantSmsConsent(req: Request, res: Response) {
     const persisted = await found.doc.ref.get();
     const whisper = persisted.data() as WhisperRecord | undefined;
     if (!whisper) throw new Error('Persisted whisper not found');
-    console.info({ event: 'sms.consent.granted', whisperId: found.doc.id, phoneLast4: normalizedPhone.slice(-4) });
-    if (whisper.deliveryFormat === 'audio') return res.json({ success: true, alreadyProcessed: false });
+    const baseUrl = process.env.APP_BASE_URL?.replace(/\/$/, '');
+    if (!baseUrl) throw new Error('Missing APP_BASE_URL');
+    const unwrapUrl = `${baseUrl}/unwrap/${secureWhisperToken}`;
+    console.info({ event: grantsConsent ? 'sms.consent.granted' : 'sms.consent.declined', whisperId: found.doc.id, phoneLast4: normalizedPhone.slice(-4) });
+    if (!grantsConsent || whisper.deliveryFormat === 'audio') {
+      return res.json({ success: true, alreadyProcessed: false, consentStatus: grantsConsent ? 'granted' : 'declined', unwrapUrl });
+    }
     try {
-      await sendWhisperSmsIfAllowed(found.doc.ref, withWhisperFallbacks(whisper));
+      await sendWhisperSmsIfAllowed(found.doc.ref, withWhisperFallbacks(whisper), secureWhisperToken);
     } catch (error) {
       await found.doc.ref.update({ smsDeliveryState: 'failed', updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp() });
       throw error;
     }
-    return res.json({ success: true, alreadyProcessed: false });
+    return res.json({ success: true, alreadyProcessed: false, consentStatus: 'granted', unwrapUrl });
   } catch (err) {
     if (err instanceof z.ZodError) {
-      const missingConsent = err.issues.some(issue => issue.path[0] === 'smsConsent');
-      return res.status(400).json({ error: missingConsent ? 'sms_consent_required' : 'invalid_request' });
+      return res.status(400).json({ error: 'invalid_request' });
     }
     if (err instanceof SmsValidationError) {
       console.warn({ event: 'sms.consent.rejected', reason: err.code });

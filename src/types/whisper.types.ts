@@ -38,7 +38,7 @@ export type WhisperStatus =
   | 'failed';
 
 export interface SmsConsentRecord {
-  status: 'pending' | 'granted' | 'revoked';
+  status: 'pending' | 'granted' | 'declined' | 'revoked';
   phoneNumber?: string | null;
   consentedAt?: FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue | null;
   revokedAt?: FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue | null;
@@ -47,6 +47,7 @@ export interface SmsConsentRecord {
   disclosureVersion?: string | null;
   termsVersion?: string | null;
   privacyVersion?: string | null;
+  disclosureText?: string | null;
 }
 
 export interface GeneratedWhisper {
@@ -77,7 +78,7 @@ export interface WhisperRecord {
   smsConsentTokenHash?: string | null;
   smsConsentTokenCreatedAt?: FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue | null;
   smsConsentTokenUsedAt?: FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue | null;
-  smsDeliveryState?: 'sending' | 'sent' | 'failed' | null;
+  smsDeliveryState?: 'not_authorized' | 'sending' | 'sent' | 'failed' | null;
   contentConfirmedAt?: FirebaseFirestore.FieldValue;
   consentSentAt?: FirebaseFirestore.FieldValue;
   acceptedAt?: FirebaseFirestore.FieldValue;
