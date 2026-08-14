@@ -1,17 +1,10 @@
-import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import twilio from 'twilio';
 import { firebaseAdmin, getFirestore } from '../services/firebase.service.js';
-import { normalizePhoneForSms, SmsValidationError } from '../services/sms.service.js';
+import { normalizePhoneForSms, phoneHash, SmsValidationError } from '../services/sms.service.js';
 import type { WhisperRecord } from '../types/whisper.types.js';
 
 const STOP_WORDS = new Set(['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT']);
-
-function hashPhone(phone: string): string {
-  const pepper = process.env.SMS_PHONE_HASH_PEPPER;
-  if (!pepper) throw new Error('Missing SMS_PHONE_HASH_PEPPER');
-  return crypto.createHmac('sha256', pepper).update(phone).digest('hex');
-}
 
 function twiml(message: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${message}</Message></Response>`;
@@ -21,7 +14,8 @@ export async function inboundSmsWebhook(req: Request, res: Response) {
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const signature = req.header('x-twilio-signature') ?? '';
   const url = process.env.TWILIO_INBOUND_WEBHOOK_URL ?? `${req.protocol}://${req.get('host')}${req.originalUrl}`;
-  if (process.env.NODE_ENV === 'production' && (!authToken || !twilio.validateRequest(authToken, signature, url, req.body))) {
+  // Webhook data is never trusted without Twilio signature validation, in every environment.
+  if (!authToken || !signature || !twilio.validateRequest(authToken, signature, url, req.body)) {
     return res.status(403).send('invalid_signature');
   }
   try {
@@ -32,12 +26,22 @@ export async function inboundSmsWebhook(req: Request, res: Response) {
       const now = firebaseAdmin.firestore.FieldValue.serverTimestamp();
       const matches = await db.collection('whispers').where('recipientPhone', '==', phone).get();
       const batch = db.batch();
-      batch.set(db.collection('smsSuppressions').doc(hashPhone(phone)), { status: 'suppressed', reason: 'STOP', createdAt: now });
+      const hashedPhone = phoneHash(phone);
+      const suppressionRef = db.collection('smsSuppressions').doc(hashedPhone);
+      const existingSuppression = await suppressionRef.get();
+      batch.set(suppressionRef, {
+        phoneHash: hashedPhone,
+        phoneLast4: phone.slice(-4),
+        reason: 'recipient_opt_out',
+        source: 'twilio-inbound',
+        ...(existingSuppression.exists ? {} : { createdAt: now }),
+        updatedAt: now,
+      }, { merge: true });
       for (const doc of matches.docs) {
         const whisper = doc.data() as WhisperRecord;
         if (whisper.smsConsent?.status === 'granted') batch.update(doc.ref, { 'smsConsent.status': 'revoked', 'smsConsent.revokedAt': now, updatedAt: now });
       }
-      batch.set(db.collection('smsConsentEvents').doc(), { event: 'sms_consent_revoked', phoneLast4: phone.slice(-4), reason: 'STOP', createdAt: now });
+      batch.set(db.collection('smsConsentEvents').doc(), { event: 'sms_consent_revoked', phoneHash: hashedPhone, phoneLast4: phone.slice(-4), reason: 'STOP', source: 'twilio-inbound', createdAt: now });
       await batch.commit();
       return res.type('text/xml').send(twiml('WhisperWrap: You are unsubscribed and will receive no further messages. Reply START to request a new consent link.'));
     }
