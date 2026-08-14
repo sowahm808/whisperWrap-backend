@@ -10,6 +10,6 @@ export const tokenService = {
   },
 };
 
-const configuredTtlHours = Number(process.env.SMS_CONSENT_TOKEN_TTL_HOURS ?? 48);
+const configuredTtlHours = Number(process.env.SMS_CONSENT_TOKEN_TTL_HOURS ?? 168);
 export const SMS_CONSENT_TOKEN_TTL_MS =
-  (Number.isFinite(configuredTtlHours) && configuredTtlHours > 0 ? configuredTtlHours : 48) * 60 * 60 * 1000;
+  (Number.isFinite(configuredTtlHours) && configuredTtlHours > 0 ? configuredTtlHours : 168) * 60 * 60 * 1000;

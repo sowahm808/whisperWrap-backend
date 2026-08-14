@@ -4,13 +4,16 @@ import {
   confirmWhisperContent,
   createAudioUploadUrl,
   generateWhisper,
+  getSmsConsent,
   getWhisper,
+  grantSmsConsent,
   markListened,
   regenerateWhisper,
   sendConsent,
   unwrapByToken,
   updateWhisperContent,
 } from '../controllers/whisper.controller.js';
+import { consentRateLimit } from '../middleware/rate-limit.middleware.js';
 
 import {
   allowPublicGeneration,
@@ -34,14 +37,6 @@ router.post(
 );
 
 /**
- * Public unwrap routes
- * Keep these ABOVE /:whisperId routes.
- */
-router.get('/unwrap/:token', unwrapByToken);
-router.post('/unwrap/:token/accept', acceptWhisper);
-router.post('/unwrap/:token/listened', markListened);
-
-/**
  * Authenticated fixed routes
  */
 router.post(
@@ -57,6 +52,22 @@ router.post(
   requireActiveSubscription,
   sendConsent
 );
+
+/**
+ * Recipient consent routes are intentionally public. Keep them before the
+ * authenticated /:whisperId routes so consent links never require Firebase
+ * authentication or get interpreted as whisper IDs.
+ */
+router.get('/sms-consent/:token', consentRateLimit, getSmsConsent);
+router.post('/sms-consent/:token', consentRateLimit, grantSmsConsent);
+
+/**
+ * Public unwrap routes
+ * Keep these ABOVE /:whisperId routes.
+ */
+router.get('/unwrap/:token', unwrapByToken);
+router.post('/unwrap/:token/accept', acceptWhisper);
+router.post('/unwrap/:token/listened', markListened);
 
 /**
  * Authenticated dynamic whisper routes
