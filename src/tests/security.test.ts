@@ -66,6 +66,15 @@ test('SMS authorization checks state, destination, suppression, and distinct acc
   assert.match(controller, /smsConsentTokenHash/);
 });
 
+test('provider failure preserves successful consent and returns a controlled accepted response', () => {
+  const controller = fs.readFileSync(new URL('../controllers/whisper.controller.js', import.meta.url), 'utf8');
+  assert.match(controller, /smsDeliveryState: 'failed'/);
+  assert.match(controller, /res\.status\(202\)\.json/);
+  assert.match(controller, /consentStatus: 'granted'/);
+  assert.match(controller, /deliveryStatus: 'failed'/);
+  assert.match(controller, /deliveryError: 'sms_delivery_failed'/);
+});
+
 test('inbound STOP is suppressed while HELP never grants consent', () => {
   const webhook = fs.readFileSync(new URL('../controllers/sms-webhook.controller.js', import.meta.url), 'utf8');
   assert.match(webhook, /STOPALL/);

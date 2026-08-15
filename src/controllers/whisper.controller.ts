@@ -686,9 +686,27 @@ export async function grantSmsConsent(req: Request, res: Response) {
       await sendWhisperSmsIfAllowed(found.doc.ref, withWhisperFallbacks(whisper), secureWhisperToken);
     } catch (error) {
       await found.doc.ref.update({ smsDeliveryState: 'failed', updatedAt: firebaseAdmin.firestore.FieldValue.serverTimestamp() });
-      throw error;
+      // Consent has already been durably recorded at this point. A provider or
+      // configuration failure must not make the recipient believe their consent
+      // submission failed (or encourage a replay of the single-use token).
+      if (error instanceof SmsValidationError) throw error;
+      logSmsError('sms.delivery.failed', error);
+      return res.status(202).json({
+        success: true,
+        alreadyProcessed: false,
+        consentStatus: 'granted',
+        deliveryStatus: 'failed',
+        deliveryError: 'sms_delivery_failed',
+        unwrapUrl,
+      });
     }
-    return res.json({ success: true, alreadyProcessed: false, consentStatus: 'granted', unwrapUrl });
+    return res.json({
+      success: true,
+      alreadyProcessed: false,
+      consentStatus: 'granted',
+      deliveryStatus: 'sent',
+      unwrapUrl,
+    });
   } catch (err) {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ error: 'invalid_request' });
