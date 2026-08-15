@@ -305,6 +305,8 @@ The public consent page uses:
 
 Disclosure text and disclosure/privacy/terms versions are returned by GET and controlled by the server; client-supplied version fields are ignored as audit evidence. The checkbox must default to unchecked in the frontend. A successful decision consumes the consent token and creates a separate random unwrap token. Replayed POSTs are successful no-ops and cannot send another SMS.
 
+If Twilio fails after consent is recorded, the POST returns `202 Accepted` with `success: true`, `consentStatus: "granted"`, `deliveryStatus: "failed"`, and the non-SMS `unwrapUrl`. This distinguishes a durable consent decision from downstream delivery, avoids misleading `502` responses, and lets the recipient continue without resubmitting a single-use token. A successful SMS response includes `deliveryStatus: "sent"`.
+
 Whisper state progresses through `generated`, `content_confirmed`, `consent_pending`, `sms_consented`, `delivered`, `opened`, and `listened`. Legacy records remain readable, but a missing `smsConsent` is always treated as not consented.
 
 Additional Firestore data:
